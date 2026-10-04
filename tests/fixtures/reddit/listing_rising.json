@@ -1,0 +1,96 @@
+{
+  "kind": "Listing",
+  "data": {
+    "after": null,
+    "dist": 3,
+    "modhash": null,
+    "geo_filter": "",
+    "before": null,
+    "children": [
+      {
+        "kind": "t3",
+        "data": {
+          "id": "1xa1b2c",
+          "name": "t3_1xa1b2c",
+          "title": "We just announced our co-op horror game BELLHOP PANIC - proximity chat, ragdolls, the lot",
+          "selftext": "Hey all! After 14 months we finally announced **Bellhop Panic**, a 1-4 player co-op horror game with proximity chat & ragdolls.\n\nWishlist on Steam: https://store.steampowered.com/app/3456780/Bellhop_Panic/.\n\nTrailer: [here](https://www.youtube.com/watch?v=abc123XYZ_0) (feedback welcome!)\n\n![gif](https://preview.redd.it/bellhop-gif.gif?width=640&format=mp4&s=1a2b)\n\nDevlog at <https://bellhop.example.com/devlog>.",
+          "author": "bellhop_studio",
+          "subreddit": "IndieDev",
+          "subreddit_name_prefixed": "r/IndieDev",
+          "subreddit_subscribers": 263114,
+          "created_utc": 1791021600.0,
+          "score": 160,
+          "ups": 160,
+          "num_comments": 25,
+          "upvote_ratio": 0.95,
+          "url": "https://www.reddit.com/r/IndieDev/comments/1xa1b2c/we_just_announced_our_coop_horror_game_bellhop/",
+          "permalink": "/r/IndieDev/comments/1xa1b2c/we_just_announced_our_coop_horror_game_bellhop/",
+          "link_flair_text": "Promotion",
+          "thumbnail": "self",
+          "is_self": true,
+          "over_18": false,
+          "stickied": false,
+          "spoiler": false,
+          "domain": "self.IndieDev",
+          "is_video": false
+        }
+      },
+      {
+        "kind": "t3",
+        "data": {
+          "id": "1xa1h3y",
+          "name": "t3_1xa1h3y",
+          "title": "Looking for 3 friends to playtest our physics co-op heist this weekend",
+          "selftext": "We need chaos testers! Join the playtest: https://discord.gg/heistcrew!",
+          "author": "heist_crew",
+          "subreddit": "CoOpGaming",
+          "subreddit_name_prefixed": "r/CoOpGaming",
+          "subreddit_subscribers": 61204,
+          "created_utc": 1791024300.0,
+          "score": 18,
+          "ups": 18,
+          "num_comments": 6,
+          "upvote_ratio": 0.92,
+          "url": "https://www.reddit.com/r/CoOpGaming/comments/1xa1h3y/looking_for_3_friends_to_playtest_our_physics/",
+          "permalink": "/r/CoOpGaming/comments/1xa1h3y/looking_for_3_friends_to_playtest_our_physics/",
+          "link_flair_text": null,
+          "thumbnail": "self",
+          "is_self": true,
+          "over_18": false,
+          "stickied": false,
+          "spoiler": false,
+          "domain": "self.CoOpGaming",
+          "is_video": false
+        }
+      },
+      {
+        "kind": "t3",
+        "data": {
+          "id": "1xa1x99",
+          "name": "t3_1xa1x99",
+          "title": "Crossposting our announcement here too",
+          "selftext": "",
+          "author": "bellhop_studio",
+          "subreddit": "SoloDevelopment",
+          "subreddit_name_prefixed": "r/SoloDevelopment",
+          "subreddit_subscribers": 88012,
+          "created_utc": 1791025200.0,
+          "score": 9,
+          "ups": 9,
+          "num_comments": 1,
+          "upvote_ratio": 1.0,
+          "url": "/r/IndieDev/comments/1xa1b2c/we_just_announced_our_coop_horror_game_bellhop/",
+          "permalink": "/r/SoloDevelopment/comments/1xa1x99/crossposting_our_announcement_here_too/",
+          "link_flair_text": null,
+          "thumbnail": "spoiler",
+          "is_self": false,
+          "over_18": false,
+          "stickied": false,
+          "spoiler": true,
+          "domain": "self.IndieDev",
+          "is_video": false
+        }
+      }
+    ]
+  }
+}

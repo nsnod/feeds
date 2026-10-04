@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -228,9 +229,16 @@ class RedditSource(_Cfg):
     enabled: bool = True
     subreddits: list[str] = Field(default_factory=list)
     listings: list[str] = Field(default_factory=lambda: ["new", "rising"])
-    limit: int = 50
+    limit: int = 50  # posts per OAuth listing request (Reddit max 100)
     comments_limit: int = 100
     max_post_age_hours: int = 72
+    new_max_pages: int = 2  # OAuth /new: follow `after` while a full page is still all unseen posts
+    # Anonymous fallback (no REDDIT_CLIENT_ID/SECRET): one combined RSS request per run.
+    rss_limit: int = 100
+    rss_retirement_date: date = date(2026, 11, 13)  # Reddit ends RSS on this day
+    try_public_json: bool = False  # anonymous .json has been blocked (403) since 2026-05-29
+    # Subscriber counts used as author_audience when the source does not report them (RSS).
+    fallback_subscribers: dict[str, int] = Field(default_factory=dict)
 
 
 class ItchFeed(_Cfg):

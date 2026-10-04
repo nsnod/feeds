@@ -46,6 +46,22 @@ reddit:
   limit: 50
   comments_limit: 100
   max_post_age_hours: 72
+  new_max_pages: 2               # OAuth only: page /new when a full page is all new posts
+  # Without REDDIT_CLIENT_ID/SECRET GemBot reads ONE combined RSS feed per run (no scores or
+  # comment counts). Reddit retires RSS on this date; after it, Reddit needs API credentials.
+  rss_limit: 100
+  rss_retirement_date: "2026-11-13"
+  try_public_json: false         # anonymous .json is blocked (HTTP 403) since 2026-05-29
+  # Subscriber counts (approx., Apr 2026) used for the underdog math when RSS cannot report them.
+  fallback_subscribers:
+    gamedev: 1900000
+    Unity3D: 409000
+    IndieGaming: 390000
+    unrealengine: 270000
+    IndieDev: 263000
+    godot: 252000
+    indiegames: 235000
+    playmygame: 105000
 
 itch:
   enabled: true
