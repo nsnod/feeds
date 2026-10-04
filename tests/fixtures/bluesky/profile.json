@@ -1,0 +1,20 @@
+{
+  "did": "did:plc:gpzdev2jq7kx4mnb3vwa5ty6",
+  "handle": "gorillapizza.bsky.social",
+  "displayName": "Banana Oven Games",
+  "description": "Two people making a game about gorillas delivering pizza. Wishlist Gorilla Pizza Panic!",
+  "avatar": "https://cdn.bsky.app/img/avatar/plain/did:plc:gpzdev2jq7kx4mnb3vwa5ty6/bafkreiavatargori@jpeg",
+  "banner": "https://cdn.bsky.app/img/banner/plain/did:plc:gpzdev2jq7kx4mnb3vwa5ty6/bafkreibanner@jpeg",
+  "followersCount": 812,
+  "followsCount": 230,
+  "postsCount": 145,
+  "associated": {
+    "lists": 0,
+    "feedgens": 0,
+    "starterPacks": 0,
+    "labeler": false
+  },
+  "indexedAt": "2025-03-01T10:00:00.000Z",
+  "createdAt": "2024-11-14T09:12:55.104Z",
+  "labels": []
+}
