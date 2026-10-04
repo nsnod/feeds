@@ -16,6 +16,7 @@ dependencies = [
   "pyyaml>=6.0,<7",
   "selectolax>=0.3",
   "discord.py>=2.4,<3",
+  "cryptography>=42",  # encrypts the Bluesky refresh token kept in the (possibly public) state branch
 ]
 
 [project.optional-dependencies]
