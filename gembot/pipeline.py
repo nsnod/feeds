@@ -22,7 +22,7 @@ from gembot.discord.feedback import apply_feedback, collect_reactions, maybe_wee
 from gembot.discord.publish import Publisher, build_card
 from gembot.discord.rest import DiscordAPI
 from gembot.enrich.comments import enrich_audience, enrich_game_comments
-from gembot.enrich.entity import LinkExpander, Resolver, ResolveResult
+from gembot.enrich.entity import LinkExpander, Resolver, ResolveResult, apply_steam_info
 from gembot.enrich.llm import LLMClassifier, build_llm
 from gembot.http import Budget, HttpClient, HttpError
 from gembot.models import (
@@ -42,7 +42,7 @@ from gembot.models import (
 )
 from gembot.scoring.decide import PostPlan, commit_plan, plan_posts
 from gembot.scoring.features import ScoringContext
-from gembot.scoring.score import prefilter, score_game
+from gembot.scoring.score import blocklist_reason, prefilter, score_game
 from gembot.scoring.weights import current_weights
 
 log = logging.getLogger("gembot.pipeline")
@@ -112,7 +112,7 @@ class Pipeline:
         self.update_health()
         self.check_keepalive()
         touched = self.ingest(mentions)
-        touched_games = self.resolve(touched)
+        touched_games = self.resolve(touched) | self.unposted_alarm_candidates()
         weights = current_weights(self.state.weights, self.settings.weights)
         self.result.shortlist = prefilter(
             self.state.games,
@@ -123,10 +123,13 @@ class Pipeline:
             self.config.blocklist,
             self.settings.run.shortlist_size,
         )
+        self.mark_excluded(touched_games)
         self.enrich(self.result.shortlist)
         self.score(self.result.shortlist, weights)
         self.decide_and_post()
         self.feedback()
+        if self.llm is not None:
+            self.llm.close()
         meta = self.state.meta
         meta.last_run_at = self.now
         meta.run_count += 1
@@ -303,6 +306,35 @@ class Pipeline:
                 if entry.game_id == absorbed:
                     entry.game_id = survivor
 
+    def unposted_alarm_candidates(self) -> set[str]:
+        """Recently scored alarm-worthy games that were never alarmed (e.g. Discord was down or
+        not set up yet). They are re-scored even without new activity so the alarm isn't lost."""
+        decisions = self.settings.decisions
+        horizon = self.now - timedelta(hours=decisions.roundup_lookback_hours)
+        found: set[str] = set()
+        for game_id, game in self.state.games.items():
+            if game.last_score is None or game.last_score < decisions.alarm_score:
+                continue
+            if game.last_scored_at is None or game.last_scored_at < horizon or game.excluded_reason:
+                continue
+            posted = self.state.posted.games.get(game_id)
+            if posted is None or (posted.alarmed_at is None and not posted.pending_roundup):
+                found.add(game_id)
+        return found
+
+    def mark_excluded(self, game_ids: set[str]) -> None:
+        """Remember blocklist exclusions so stored scores never sneak into a roundup."""
+        for game_id in game_ids:
+            game = self.state.games.get(game_id)
+            if game is None:
+                continue
+            mentions = [self.state.mentions[k] for k in game.mention_keys if k in self.state.mentions]
+            reason = blocklist_reason(game, mentions, self.config.blocklist)
+            if reason:
+                game.excluded_reason = reason
+            elif game.excluded_reason and not game.excluded_reason.endswith("(LLM)"):
+                game.excluded_reason = None
+
     # ------------------------------------------------------------------ 4 enrich
     def enrich(self, shortlist: list[str]) -> None:
         if self.llm is None:
@@ -314,16 +346,11 @@ class Pipeline:
             if game is None:
                 continue
             if game.steam_appid and steam is not None and hasattr(steam, "fetch_appdetails"):
-                fresh = (
-                    game.steam and game.steam.fetched_at and self.now - game.steam.fetched_at < STEAM_REFRESH
-                )
-                if not fresh:
+                fetched = game.steam.fetched_at if game.steam else None
+                if fetched is None or self.now - fetched >= STEAM_REFRESH:
                     info = _safe_appdetails(steam, game.steam_appid)
                     if info is not None:
-                        game.steam = info
-                        game.developer = game.developer or (info.developers[0] if info.developers else None)
-                        game.publisher = game.publisher or (info.publishers[0] if info.publishers else None)
-                        game.thumb = game.thumb or info.header_image
+                        apply_steam_info(game, info)
             enrich_audience(game, self.state.mentions, self.collectors)
             self._signals[game_id] = enrich_game_comments(
                 game, self.state.mentions, self.collectors, now=self.now, settings=self.settings
