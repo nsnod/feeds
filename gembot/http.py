@@ -201,7 +201,9 @@ class HttpClient:
         """
         max_retries = self.retries if retries is None else max(retries, 0)
         hdrs = dict(headers or {})
-        cache_key = str(httpx.URL(url, params=params)) if conditional else None
+        # copy_merge_params keeps the URL's own query (httpx.URL(url, params=None) drops it,
+        # which would make every ``feed.xml?channel_id=...`` share one cache entry)
+        cache_key = str(httpx.URL(url).copy_merge_params(params or {})) if conditional else None
         if cache_key and cache_key in self.cache:
             entry = self.cache[cache_key]
             if entry.etag:

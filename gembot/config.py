@@ -10,7 +10,9 @@ Secrets only ever come from the environment (GitHub Actions secrets).
 
 from __future__ import annotations
 
+import logging
 import os
+import re
 from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
@@ -41,6 +43,11 @@ class RunSettings(_Cfg):
     shortlist_size: int = 40
     max_comments_per_post: int = 100
     comment_refresh_hours: float = 6.0  # re-fetch comments for a post at most this often
+    # Wall-clock limits (the scan job is killed after 8 minutes): sources stop collecting after
+    # collect_seconds, enrichment (comments, Steam details, links, LLM) after network_seconds,
+    # so posting to Discord and saving state always get their turn.
+    collect_seconds: float = 180.0
+    network_seconds: float = 300.0
 
 
 class Budgets(_Cfg):
@@ -365,6 +372,9 @@ class Blocklist(_Cfg):
 # --------------------------------------------------------------------------------------
 
 
+_SNOWFLAKE = re.compile(r"\d{15,21}")
+
+
 class Secrets(BaseModel):
     """Credentials and per-install IDs, read from environment variables only."""
 
@@ -383,6 +393,20 @@ class Secrets(BaseModel):
     anthropic_api_key: str | None = None
     github_token: str | None = None
     github_repository: str | None = None
+
+    @field_validator("alarm_ping_role_id", mode="after")
+    @classmethod
+    def _role_id(cls, value: str | None) -> str | None:
+        """Discord IDs are 17-20 digit numbers. A pasted ``<@&123…>`` mention is unwrapped;
+        anything else is ignored (with a warning) instead of ending up in every alarm.
+        (``DISCORD_GUILD_ID`` needs no check: it is only compared with the bot's servers.)"""
+        if value is None:
+            return None
+        bare = value.removeprefix("<@&").removesuffix(">")
+        if _SNOWFLAKE.fullmatch(bare):
+            return bare
+        logging.getLogger("gembot.config").warning("ALARM_PING_ROLE_ID is not a Discord role ID; ignoring it")
+        return None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Secrets:

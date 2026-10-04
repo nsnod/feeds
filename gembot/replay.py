@@ -194,6 +194,7 @@ def replay_day(directory: Path, *, config: Config | None = None) -> dict[str, An
                 result = Pipeline(
                     config, state, http=http, now=now, discord=fake, sleep=_no_sleep, env={}
                 ).run()
+            prune(state, now, config.settings.state, config.settings.features.baseline_window_days)
             store.save(state)
             sent = fake.sent[before:]
             output["runs"].append(

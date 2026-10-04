@@ -236,7 +236,11 @@ def apply_feedback(
             if label == entry.applied_label:
                 continue
             delta = label - entry.applied_label
-            current = dict(w.update_weights(current, entry.features, delta, settings))
+            # one learning step per unit of change: a 👍 switched to 👎 (delta -2) first undoes
+            # the 👍, then applies the 👎 (update_weights clamps its label to ±1)
+            steps = max(1, round(abs(delta)))
+            for _ in range(steps):
+                current = dict(w.update_weights(current, entry.features, delta / steps, settings))
             entry.applied_label = label
             labels.append(
                 LabelExample(
@@ -272,11 +276,14 @@ def maybe_weekly_note(
     now: datetime,
     settings: FeedbackSettings,
     defaults: dict[str, float],
+    commit: bool = True,
 ) -> str | None:
     """Once every ``weekly_note_days``: a plain-English note on how the weights moved.
 
     Returns None when it is not time yet, or when nothing meaningful changed (the timestamp
-    still advances so the check does not repeat every run).
+    still advances so the check does not repeat every run). With ``commit=False`` a note that
+    *is* returned is not marked as sent: call :func:`mark_weekly_note` once it was posted, so a
+    failed post is retried on the next run.
     """
     if not settings.enabled:
         return None
@@ -288,6 +295,12 @@ def maybe_weekly_note(
     before = dict(weights.weights_at_last_note) or dict(defaults)
     recent = [x for x in labels if last is None or x.at > last]
     note = w.describe_change(before, current, recent)
-    weights.last_weekly_note_at = now
-    weights.weights_at_last_note = current
+    if note is None or commit:
+        mark_weekly_note(weights, now=now, defaults=defaults)
     return note
+
+
+def mark_weekly_note(weights: WeightsState, *, now: datetime, defaults: dict[str, float]) -> None:
+    """Remember that the weekly note was written: the next one compares against these weights."""
+    weights.last_weekly_note_at = now
+    weights.weights_at_last_note = dict(_weights_module().current_weights(weights, defaults))

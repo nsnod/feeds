@@ -10,6 +10,8 @@ run:
   shortlist_size: 40       # games that get the expensive enrichment each run
   max_comments_per_post: 100
   comment_refresh_hours: 6
+  collect_seconds: 180     # sources stop after this long (the scan job is killed at 8 minutes)
+  network_seconds: 300     # enrichment stops after this long, so posting + saving always fit
 
 # Hard cap on HTTP requests per source per run (be polite!).
 budgets:

@@ -129,6 +129,15 @@ def relative_time(moment: datetime, now: datetime) -> str:
     return f"{days} days ago"
 
 
+_MD_SPECIAL = re.compile(r"([\\*_~`|>\[\]<])")
+
+
+def escape_markdown(text: str) -> str:
+    """Show text from the internet literally: no bold/strike/spoilers, no masked links, no
+    ``<@…>``/``<#…>`` mentions. (Pings are already impossible: ``allowed_mentions`` is locked.)"""
+    return _MD_SPECIAL.sub(r"\\\1", text)
+
+
 def _md_label(label: str) -> str:
     return label.replace("[", "(").replace("]", ")").strip() or "link"
 
@@ -177,11 +186,11 @@ def alarm_payload(card: GemCard, *, ping_role_id: str | None = None, now: dateti
     """
     title = f"{_title_flags(card)}🚨 GEM ALARM: {card.title}"
     description = f"**Gem Score** {score_bar(card.score)}"
-    reasons = [r.strip() for r in card.reasons if r and r.strip()]
+    reasons = [escape_markdown(r.strip()) for r in card.reasons if r and r.strip()]
     if reasons:
         description += "\n\n" + "\n".join(f"• {r}" for r in reasons)
     if card.pitch and card.pitch.strip():
-        description += "\n\n> " + shorten(card.pitch, 300)
+        description += "\n\n> " + escape_markdown(shorten(card.pitch, 300))
 
     embed: dict[str, Any] = {"title": title, "description": description, "color": ALARM_COLOR}
     if card.url:
@@ -199,7 +208,10 @@ def alarm_payload(card: GemCard, *, ping_role_id: str | None = None, now: dateti
         embed["footer"] = {"text": f"First seen {when}"}
         embed["timestamp"] = first_seen.isoformat()
 
-    content = f"{_title_flags(card)}🚨 **GEM ALARM:** {card.title} · Gem Score {score_int(card.score)}"
+    content = (
+        f"{_title_flags(card)}🚨 **GEM ALARM:** {escape_markdown(card.title)} · "
+        f"Gem Score {score_int(card.score)}"
+    )
     payload: dict[str, Any] = {"embeds": [embed]}
     if ping_role_id:
         payload["content"] = f"<@&{ping_role_id}> {content}"
@@ -227,7 +239,7 @@ def roundup_entry_payload(card: GemCard) -> dict:
     lines = [f"Gem Score {score_bar(card.score)}"]
     top = next((r.strip() for r in card.reasons if r and r.strip()), None)
     if top:
-        lines.append(top)
+        lines.append(escape_markdown(top))
     inline_links = links_line(card.links, limit=1000)
     if inline_links:
         lines.append(inline_links)

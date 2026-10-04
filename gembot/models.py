@@ -8,6 +8,7 @@ Timestamps are always timezone-aware UTC ``datetime`` objects.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
@@ -64,6 +65,25 @@ def _utc_validator(value: Any) -> Any:
     return value
 
 
+# A lone UTF-16 surrogate (e.g. a JSON "\ud83d" cut in half by a platform) is a valid Python
+# str but cannot be written as UTF-8: one such post would make saving the state fail.
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+MAX_TITLE_CHARS = 1_000  # real titles are far shorter; this stops a broken feed's <title>
+MAX_BODY_CHARS = 20_000
+
+
+def clean_text(value: str) -> str:
+    """Replace lone surrogates with U+FFFD."""
+    return _LONE_SURROGATE.sub("\ufffd", value)
+
+
+def _text_validator(limit: int):
+    def check(value: Any) -> Any:
+        return clean_text(value)[:limit] if isinstance(value, str) else value
+
+    return check
+
+
 # --------------------------------------------------------------------------------------
 # Collection
 # --------------------------------------------------------------------------------------
@@ -89,6 +109,7 @@ class Comment(_Model):
     is_bot: bool = False
 
     _utc = field_validator("created_at", mode="before")(_utc_validator)
+    _text = field_validator("author", "text", mode="before")(_text_validator(MAX_BODY_CHARS))
 
 
 class Snapshot(_Model):
@@ -136,6 +157,10 @@ class Mention(_Model):
     _utc = field_validator("created_at", "first_seen", "observed_at", "comments_fetched_at", mode="before")(
         _utc_validator
     )
+    _title = field_validator("title", mode="before")(_text_validator(MAX_TITLE_CHARS))
+    _body = field_validator("text", mode="before")(_text_validator(MAX_BODY_CHARS))
+    _short = field_validator("author", "channel", mode="before")(_text_validator(MAX_TITLE_CHARS))
+    _url = field_validator("url", mode="before")(_text_validator(MAX_BODY_CHARS))
 
     @property
     def key(self) -> str:

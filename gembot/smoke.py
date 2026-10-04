@@ -135,6 +135,7 @@ def run_smoke(
     from gembot.runner import make_http
 
     state = _load_state_copy(state_dir)
+    state.meta.http_cache = {}  # read every feed for real: a 304 would test nothing
     started = time.monotonic()
     with make_http(config, state, now=now, transport=transport, sleep=sleep) as http:
         pipeline = Pipeline(config, state, http=http, now=now, discord=None, post=False, sleep=sleep)

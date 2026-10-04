@@ -47,6 +47,7 @@ from gembot.models import (
     PostedMessage,
     State,
     WeightsState,
+    clean_text,
     ensure_utc,
 )
 
@@ -120,7 +121,8 @@ _BASELINES = TypeAdapter(dict[str, dict[str, BaselineSample]])
 
 
 def _encode(obj: Any) -> str:
-    return json.dumps(obj, **_ENCODE_KW)
+    # clean_text: any lone surrogate left in a string would make the UTF-8 write fail
+    return clean_text(json.dumps(obj, **_ENCODE_KW))
 
 
 def _encode_lines(obj: Any, levels: int) -> str:
@@ -432,7 +434,10 @@ def prune(state: State, now: datetime, settings: StateSettings, baseline_days: i
 
     # Seen post IDs.
     seen_cutoff = now - timedelta(days=settings.seen_days)
-    old_seen = [key for key, at in state.seen.items() if ensure_utc(at) < seen_cutoff]
+    # Keys of mentions still stored stay: they are how "new" is told apart from "seen before".
+    old_seen = [
+        key for key, at in state.seen.items() if ensure_utc(at) < seen_cutoff and key not in state.mentions
+    ]
     for key in old_seen:
         del state.seen[key]
     removed["seen"] = len(old_seen)

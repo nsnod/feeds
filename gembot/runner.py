@@ -88,6 +88,8 @@ def run_scan(
             pipeline = Pipeline(config, state, http=http, now=now, discord=api, post=not dry_run, sleep=sleep)
             result = pipeline.run()
         _log_summary(result)
+        # what this run added counts toward the size cap too
+        prune(state, now, config.settings.state, config.settings.features.baseline_window_days)
         store.save(state)
         log.info("state size: %.1f KB", store.size_bytes() / 1024)
         if push:

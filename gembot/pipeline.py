@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -18,13 +19,13 @@ from pathlib import Path
 from gembot.collectors import build_collectors
 from gembot.collectors.base import CollectContext, Collector, SourceReport
 from gembot.config import Config
-from gembot.discord.feedback import apply_feedback, collect_reactions, maybe_weekly_note
+from gembot.discord.feedback import apply_feedback, collect_reactions, mark_weekly_note, maybe_weekly_note
 from gembot.discord.publish import Publisher, build_card
 from gembot.discord.rest import DiscordAPI
 from gembot.enrich.comments import enrich_audience, enrich_game_comments
 from gembot.enrich.entity import LinkExpander, Resolver, ResolveResult, apply_steam_info
 from gembot.enrich.llm import LLMClassifier, build_llm
-from gembot.http import Budget, HttpClient, HttpError
+from gembot.http import Budget, HttpClient
 from gembot.models import (
     BaselineSample,
     CommentSignals,
@@ -97,23 +98,35 @@ class Pipeline:
         self.sleep = sleep
         self.env = dict(os.environ if env is None else env)
         self.result = RunResult(now=now)
+        # run once the status message is actually posted (an alert must not be marked as
+        # sent when Discord was down or not set up yet: the next run tries again)
+        self._on_status_posted: list[Callable[[], None]] = []
         ctx = CollectContext(config=config, http=http, now=now, state=state)
         self.collectors: dict[str, Collector] = (
             dict(collectors) if collectors is not None else build_collectors(ctx)
         )
         self.llm = llm
+        # time.monotonic() cut-offs for network work, set by run(): collectors stop at the
+        # first one, enrichment (comments, Steam details, links, LLM) at the second, so
+        # posting and saving state always fit in the workflow's time limit.
+        self.collect_deadline: float | None = None
+        self.network_deadline: float | None = None
         self.scoring = ScoringContext(
             settings=config.settings, sources=config.sources, now=now, baselines=state.baselines
         )
 
     # ------------------------------------------------------------------ run
     def run(self) -> RunResult:
+        started = time.monotonic()
+        self.collect_deadline = started + self.settings.run.collect_seconds
+        self.network_deadline = started + self.settings.run.network_seconds
         mentions = self.collect()
         self.update_health()
         self.check_keepalive()
         touched = self.ingest(mentions)
         touched_games = self.resolve(touched) | self.unposted_alarm_candidates()
         weights = current_weights(self.state.weights, self.settings.weights)
+        self.mark_excluded(touched_games)
         self.result.shortlist = prefilter(
             self.state.games,
             self.state.mentions,
@@ -123,7 +136,6 @@ class Pipeline:
             self.config.blocklist,
             self.settings.run.shortlist_size,
         )
-        self.mark_excluded(touched_games)
         self.enrich(self.result.shortlist)
         self.score(self.result.shortlist, weights)
         self.decide_and_post()
@@ -138,6 +150,7 @@ class Pipeline:
     # ------------------------------------------------------------------ 1 collect
     def collect(self) -> list[Mention]:
         found: list[Mention] = []
+        self._set_deadline(self.collect_deadline)
         for name, collector in self.collectors.items():
             mentions, report = collector.run()
             self.result.reports[name] = report
@@ -146,7 +159,14 @@ class Pipeline:
                 log.warning("%s: %s", name, error)
             found.extend(mentions)
         self.result.collected = len(found)
+        self._set_deadline(self.network_deadline)  # enrichment reuses the collectors' budgets
         return found
+
+    def _set_deadline(self, deadline: float | None) -> None:
+        for collector in self.collectors.values():
+            budget = getattr(collector, "budget", None)
+            if isinstance(budget, Budget):
+                budget.deadline = deadline
 
     def update_health(self) -> None:
         threshold = self.settings.discord.status_failure_threshold
@@ -168,7 +188,7 @@ class Pipeline:
                 health.last_error_at = self.now
                 health.last_error = (report.errors[-1] if report.errors else "unknown error")[:300]
                 if health.consecutive_failures >= threshold and not health.alerted_broken:
-                    health.alerted_broken = True
+                    self._on_status_posted.append(lambda h=health: setattr(h, "alerted_broken", True))
                     self.result.status_lines.append(
                         f"⚠️ **{name}** has failed {health.consecutive_failures} runs in a row. "
                         f"Last error: `{health.last_error}`"
@@ -197,7 +217,7 @@ class Pipeline:
             days=cfg.remind_every_days
         ):
             return
-        meta.keepalive_reminded_at = self.now
+        self._on_status_posted.append(lambda: setattr(meta, "keepalive_reminded_at", self.now))
         self.result.status_lines.append(
             f"⏰ Nobody has pushed to the main branch for {idle_days} days. GitHub switches off scheduled "
             "workflows in public repos after 60 days without activity, which would stop GemBot. Push any "
@@ -213,15 +233,17 @@ class Pipeline:
         for mention in mentions:
             key = mention.key
             first_seen = state.seen.get(key)
-            is_new = first_seen is None
             stored = state.mentions.get(key)
+            is_new = first_seen is None and stored is None
             if stored is not None:
                 merged = _merge_mention(stored, mention)
             else:
                 merged = mention
-                merged.first_seen = mention.first_seen or self.now
+                # a body dropped earlier (unresolvable, size cap) keeps the time it was first seen
+                merged.first_seen = mention.first_seen or first_seen or self.now
             if is_new:
                 self.result.new_mentions += 1
+            if key not in state.seen:
                 state.seen[key] = merged.first_seen or self.now
             merged.first_seen = merged.first_seen or state.seen[key]
             merged.observed_at = self.now
@@ -229,13 +251,18 @@ class Pipeline:
             _append_snapshot(merged, self.now)
             state.mentions[key] = merged
             self._record_baseline(merged)
-            if changed or merged.game_id is None or merged.game_id not in state.games:
+            game = state.games.get(merged.game_id) if merged.game_id else None
+            if game is not None:
+                game.last_seen = self.now  # still listed/posted: not stale, even if nothing changed
+            if changed or game is None:
                 touched.append(key)
         return touched
 
     def _record_baseline(self, mention: Mention) -> None:
         if mention.source in {"steam", "itch"}:
             return  # ranked listings, no engagement numbers
+        if mention.extra.get("engagement_known") is False:
+            return  # e.g. Reddit RSS: zeros would drag the channel's normal pace down
         age = mention.age_hours(self.now)
         if age < 1.0:
             return  # too young to say anything about its hourly pace
@@ -264,7 +291,7 @@ class Pipeline:
             games.add(game.game_id)
         expander = LinkExpander(
             self.http,
-            Budget("resolver", self.settings.budgets.resolver),
+            Budget("resolver", self.settings.budgets.resolver, deadline=self.network_deadline),
             self.config.sources.resolver.shortener_hosts,
         )
         resolver = Resolver(
@@ -323,7 +350,9 @@ class Pipeline:
         return found
 
     def mark_excluded(self, game_ids: set[str]) -> None:
-        """Remember blocklist exclusions so stored scores never sneak into a roundup."""
+        """Settle exclusions before the prefilter: blocklist hits are remembered (so stored scores
+        never sneak into a roundup) and lifted when the blocklist changes; the LLM's "not a
+        specific game" verdict is lifted once the game has a Steam page."""
         for game_id in game_ids:
             game = self.state.games.get(game_id)
             if game is None:
@@ -332,13 +361,15 @@ class Pipeline:
             reason = blocklist_reason(game, mentions, self.config.blocklist)
             if reason:
                 game.excluded_reason = reason
-            elif game.excluded_reason and not game.excluded_reason.endswith("(LLM)"):
+            elif game.excluded_reason and (not game.excluded_reason.endswith("(LLM)") or game.steam_appid):
                 game.excluded_reason = None
 
     # ------------------------------------------------------------------ 4 enrich
     def enrich(self, shortlist: list[str]) -> None:
         if self.llm is None:
             self.llm = build_llm(self.config, self.http)
+        if self.llm is not None and isinstance(getattr(self.llm, "budget", None), Budget):
+            self.llm.budget.deadline = self.network_deadline
         steam = self.collectors.get("steam")
         self._signals: dict[str, CommentSignals] = {}
         for game_id in shortlist:
@@ -419,12 +450,12 @@ class Pipeline:
             )
             try:
                 message = publisher.post_alarm(card, self._features(decision.game_id), self.now)
-            except HttpError as exc:
+            except Exception as exc:  # never lose the run (and its state) over one post
                 self.result.warnings.append(f"alarm for {game.title} not posted: {exc}")
                 continue
             self._remember(message)
             sent_alarms.append(decision)
-        roundup_ok = True
+        roundup_ok = True  # a due roundup with nothing in it still counts as done
         if plan.roundup:
             cards = []
             for decision in plan.roundup:
@@ -438,13 +469,21 @@ class Pipeline:
                     max_links=3,
                 )
                 cards.append((card, self._features(decision.game_id)))
+            sent_ids: set[str] = set()
             try:
                 for message in publisher.post_roundup(cards, self.now):
                     self._remember(message)
-                sent_roundup = list(plan.roundup)
-            except HttpError as exc:
-                roundup_ok = False
+                    sent_ids.update(entry.game_id for entry in message.entries)
+            except Exception as exc:
                 self.result.warnings.append(f"roundup not posted: {exc}")
+            # entries that failed stay unposted (and pending), so the next roundup retries them
+            sent_roundup = [d for d in plan.roundup if d.game_id in sent_ids]
+            missed = len(plan.roundup) - len(sent_roundup)
+            if missed and sent_roundup:
+                self.result.warnings.append(
+                    f"{missed} roundup entr{'y' if missed == 1 else 'ies'} not posted"
+                )
+            roundup_ok = bool(sent_roundup)
         committed = PostPlan(
             alarms=sent_alarms,
             roundup=sent_roundup,
@@ -455,10 +494,13 @@ class Pipeline:
         if self.result.status_lines:
             try:
                 message = publisher.post_status(self.result.status_lines, self.now)
+            except Exception as exc:
+                self.result.warnings.append(f"status message not posted: {exc}")
+            else:
                 if message is not None:
                     self._remember(message)
-            except HttpError as exc:
-                self.result.warnings.append(f"status message not posted: {exc}")
+                    for mark_sent in self._on_status_posted:
+                        mark_sent()
 
     def _publisher(self) -> Publisher | None:
         if not self.post or self.discord is None:
@@ -503,7 +545,7 @@ class Pipeline:
                 budget=Budget("discord_feedback", self.settings.budgets.discord_feedback),
                 bot_user_id=self.state.meta.discord.bot_user_id,
             )
-        except HttpError as exc:
+        except Exception as exc:  # reactions are a bonus: never fail the run over them
             self.result.warnings.append(f"could not read reactions: {exc}")
             return
         labels = apply_feedback(
@@ -516,18 +558,27 @@ class Pipeline:
         )
         self.state.labels.extend(labels)
         self.result.labels = labels
+        publisher = self._publisher()
+        if publisher is None:
+            return  # the weekly note waits until it can actually be posted
         note = maybe_weekly_note(
-            self.state.weights, self.state.labels, now=self.now, settings=fb, defaults=self.settings.weights
+            self.state.weights,
+            self.state.labels,
+            now=self.now,
+            settings=fb,
+            defaults=self.settings.weights,
+            commit=False,
         )
         self.result.weekly_note = note
-        publisher = self._publisher()
-        if note and publisher is not None:
+        if note:
             try:
                 message = publisher.post_status([note], self.now)
-                if message is not None:
-                    self._remember(message)
-            except HttpError as exc:
+            except Exception as exc:  # not marked as sent: the next run tries again
                 self.result.warnings.append(f"weekly note not posted: {exc}")
+                return
+            if message is not None:
+                self._remember(message)
+            mark_weekly_note(self.state.weights, now=self.now, defaults=self.settings.weights)
 
 
 # ---------------------------------------------------------------------- helpers

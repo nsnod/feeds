@@ -381,7 +381,8 @@ def test_switching_vote_applies_only_the_difference(fake, publisher, wmod):
     labels = fb.apply_feedback(
         posted, weights, collect(fake, posted, now=later), now=later, defaults=DEFAULTS, settings=SETTINGS
     )
-    assert [u[0] for u in wmod.updates] == [1.0, -2.0]
+    # 👍 -> 👎 is a change of -2: undo the 👍, then apply the 👎 (two clamped ±1 steps)
+    assert [u[0] for u in wmod.updates] == [1.0, -1.0, -1.0]
     assert [(x.label, x.up, x.down) for x in labels] == [(-1.0, 0, 1)]
     assert len(weights.history) == 2
 

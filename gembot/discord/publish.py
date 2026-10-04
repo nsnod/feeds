@@ -58,7 +58,10 @@ class PublishError(RuntimeError):
 
 def _url_key(url: str) -> str:
     """A loose identity for de-duplicating links (scheme, ``www.``, trailing ``/`` ignored)."""
-    parts = urlsplit(url.strip())
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:  # e.g. "http://[::1/...": compare it as plain text
+        return url.strip()
     host = parts.netloc.lower().removeprefix("www.")
     if host == "store.steampowered.com" and (match := _STEAM_APP.match(parts.path)):
         return f"steam:{match.group(1)}"
