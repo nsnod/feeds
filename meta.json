@@ -3,7 +3,7 @@
 "bluesky":{"created":["2026-10-04T07:21:28Z"],"login_error":{"at":"2026-10-04T07:21:28Z","fatal":true,"fp":"f314d6c2c604b379","handle_check":"missing","message":"BLUESKY_HANDLE is not a Bluesky account: use the full handle, like yourname.bsky.social (no @, no link, not the display name)","rejected":true},"public_ok":false,"public_probe_at":"2026-10-04T06:28:03Z"},
 "itch":{},
 "reddit":{},
-"steam":{"cursor:comingsoon-indie-coop":200,"cursor:comingsoon-indie-multiplayer":200,"cursor:comingsoon-indie-online-coop":200,"skip":{"3309070":{"at":"2026-10-04T07:21:28.644396+00:00","why":"mmo"}}}
+"steam":{"cursor:comingsoon-indie-coop":250,"cursor:comingsoon-indie-multiplayer":250,"cursor:comingsoon-indie-online-coop":250,"skip":{"3309070":{"at":"2026-10-04T07:21:28.644396+00:00","why":"mmo"}}}
 },
 "daily_alarms":{},
 "discord":{
@@ -15,18 +15,18 @@
 },
 "game_aliases":{},
 "http_cache":{
-"https://rss.app/feeds/5KcRbde1HFqAzPdx.xml":{"at":"2026-10-04T12:48:15.117662Z","etag":"W/\"98da-Cp76+2tqudLYeca8M7qwfiRlRFM\""},
-"https://rss.app/feeds/K1vwmXudAkt1exqO.xml":{"at":"2026-10-04T12:48:15.117662Z","etag":"W/\"b121-ds2JyjFTUNjMz46Fc7QFSmLResU\""}
+"https://rss.app/feeds/5KcRbde1HFqAzPdx.xml":{"at":"2026-10-04T17:24:58.801877Z","etag":"W/\"98da-Lme+Ir4+faaWzeTEZ36yau76Cl0\""},
+"https://rss.app/feeds/K1vwmXudAkt1exqO.xml":{"at":"2026-10-04T17:24:58.801877Z","etag":"W/\"acac-+VsDORgPPLnDawZKIS5mivVao+U\""}
 },
-"last_roundup_at":"2026-10-04T12:48:15.117662Z",
-"last_run_at":"2026-10-04T12:48:15.117662Z",
-"run_count":4,
+"last_roundup_at":"2026-10-04T17:24:58.801877Z",
+"last_run_at":"2026-10-04T17:24:58.801877Z",
+"run_count":5,
 "schema_version":1,
 "source_health":{
-"bluesky":{"alerted_broken":false,"consecutive_failures":2,"last_error":"login: BLUESKY_HANDLE is not a Bluesky account: use the full handle, like yourname.bsky.social (no @, no link, not the display name) (next try 2026-10-05T07:21:28Z or when the secret changes)","last_error_at":"2026-10-04T12:48:15.117662Z"},
-"itch":{"alerted_broken":false,"consecutive_failures":0,"last_ok_at":"2026-10-04T12:48:15.117662Z"},
-"reddit":{"alerted_broken":false,"consecutive_failures":0,"last_ok_at":"2026-10-04T12:48:15.117662Z"},
-"rss":{"alerted_broken":false,"consecutive_failures":0,"last_ok_at":"2026-10-04T12:48:15.117662Z"},
-"steam":{"alerted_broken":false,"consecutive_failures":0,"last_ok_at":"2026-10-04T12:48:15.117662Z"}
+"bluesky":{"alerted_broken":false,"consecutive_failures":3,"last_error":"login: BLUESKY_HANDLE is not a Bluesky account: use the full handle, like yourname.bsky.social (no @, no link, not the display name) (next try 2026-10-05T07:21:28Z or when the secret changes)","last_error_at":"2026-10-04T17:24:58.801877Z"},
+"itch":{"alerted_broken":false,"consecutive_failures":0,"last_ok_at":"2026-10-04T17:24:58.801877Z"},
+"reddit":{"alerted_broken":false,"consecutive_failures":0,"last_ok_at":"2026-10-04T17:24:58.801877Z"},
+"rss":{"alerted_broken":false,"consecutive_failures":0,"last_ok_at":"2026-10-04T17:24:58.801877Z"},
+"steam":{"alerted_broken":false,"consecutive_failures":0,"last_ok_at":"2026-10-04T17:24:58.801877Z"}
 }
 }
