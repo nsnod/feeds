@@ -6,6 +6,7 @@ so these exercise the real resolver, scoring, decisions, publishing and feedback
 
 from __future__ import annotations
 
+import time
 from datetime import timedelta
 
 import pytest
@@ -591,3 +592,30 @@ def test_llm_title_replaces_a_heuristic_title_for_games_without_a_store_page():
     game = world.state.games[world.state.mentions["reddit:ms1"].game_id]
     assert game.title == "Moon Soup Simulator"
     assert game.game_id in result.results
+
+
+def test_sources_stop_at_the_collect_deadline_and_enrichment_gets_its_own():
+    class Slow(StubCollector):
+        def collect(self):
+            self.budget.take()  # one "request"
+            return super().collect()
+
+        def fetch_comments(self, mention, limit):
+            self.budget.take()
+            return super().fetch_comments(mention, limit)
+
+    settings = make_config().settings
+    run = settings.run.model_copy(update={"collect_seconds": 0.0, "network_seconds": 3600.0})
+    world = World(make_config(settings=settings.model_copy(update={"run": run})))
+    post = make_mention("reddit", "d1", title="Moon Soup Simulator co-op", hours_ago=2, comments=5)
+    seen = {}
+
+    def factory(ctx):
+        seen["c"] = Slow(ctx, [post], {post.key: wishlist_comments(n_intent=1, n_plain=1)})
+        return {"reddit": seen["c"]}
+
+    result = world.run(NOW, factory)
+    report = result.reports["reddit"]
+    assert report.mentions == 0 and any("out of time" in w for w in report.warnings)
+    # after collecting, the collector's budget runs on the (later) enrichment deadline
+    assert seen["c"].budget.deadline - time.monotonic() > 3000
