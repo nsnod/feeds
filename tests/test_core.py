@@ -12,13 +12,13 @@ from gembot.collectors.base import CollectContext, Collector
 from gembot.config import ConfigError, Secrets, Settings, load_config
 from gembot.http import Budget, BudgetExceeded, HttpError, RateLimited
 from gembot.models import Engagement, Game, Mention, State, ensure_utc, platform_label
-from tests.factories import NOW, ROOT, make_config, make_http, make_mention
+from tests.factories import NOW, TEST_CONFIG_DIR, make_config, make_http, make_mention
 
 # ---------------------------------------------------------------- config
 
 
 def test_default_config_loads_and_weights_are_complete():
-    config = load_config(ROOT / "config", env={})
+    config = load_config(TEST_CONFIG_DIR, env={})
     assert config.settings.weights == pytest.approx(
         {
             "velocity": 0.25,

@@ -17,7 +17,7 @@ from gembot.replay import ReplayTransport, Route, load_routes
 from gembot.runner import make_discord, run_scan, run_setup_command
 from gembot.smoke import render_summary, run_smoke
 from gembot.state.store import StateStore
-from tests.factories import NOW, make_config, make_http
+from tests.factories import NOW, TEST_CONFIG_DIR, make_config, make_http
 
 GIT_ENV = {
     "GIT_CONFIG_GLOBAL": "/dev/null",
@@ -352,7 +352,7 @@ def test_replay_check_reports_missing_and_mismatched_golden(tmp_path, capsys):
     (tmp_path / "expected.json").write_text("{}\n")
     assert run_replay(tmp_path, check=True) == 1
     assert "differs" in capsys.readouterr().out
-    assert run_replay(tmp_path, config_dir=Path("config")) == 0
+    assert run_replay(tmp_path, config_dir=TEST_CONFIG_DIR) == 0
 
 
 def test_replay_reactions_need_an_existing_message(tmp_path):
@@ -374,3 +374,23 @@ def test_now_is_timezone_aware_in_replay_parse():
     assert _parse_time(NOW) == NOW
     assert _parse_time(NOW.replace(tzinfo=None)) == NOW
     assert _parse_time("2026-10-03T12:00:00Z") + timedelta(0) == NOW
+
+
+def test_check_config_reports_problems_and_lists_feeds(tmp_path, capsys):
+    (tmp_path / "feeds.yaml").write_text(
+        "feeds:\n  - name: A\n    url: https://rss.app/feeds/abc.xml\n    source: instagram\n"
+        "  - name: B\n    url: https://example.com/feed.xml\n    enabled: false\n"
+    )
+    assert cli.main(["--config-dir", str(tmp_path), "check-config"]) == 0
+    out = capsys.readouterr().out
+    assert "config OK" in out and "2 feed(s)" in out and "B [rss] (paused)" in out
+    (tmp_path / "feeds.yaml").write_text("feeds:\n  - name: A\n    url: https://x/feed\nfeeds: [2]\n")
+    assert cli.main(["--config-dir", str(tmp_path), "check-config"]) == 1
+    assert "config problem: feeds.yaml" in capsys.readouterr().out
+
+
+def test_replay_does_not_need_a_valid_user_config(tmp_path, monkeypatch):
+    (tmp_path / "settings.yaml").write_text("decisions: {alarm_scor: 1}\n")  # broken on purpose
+    monkeypatch.setenv("GEMBOT_CONFIG_DIR", str(tmp_path))
+    scenario = TEST_CONFIG_DIR.parent / "scenario_day"
+    assert cli.main(["replay", str(scenario), "--check"]) == 0

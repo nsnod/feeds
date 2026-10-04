@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import tempfile
 from dataclasses import dataclass, field
@@ -170,8 +171,11 @@ def replay_day(directory: Path, *, config: Config | None = None) -> dict[str, An
     manifest = yaml.safe_load((directory / "manifest.yaml").read_text(encoding="utf-8"))
     env = {str(k): str(v) for k, v in (manifest.get("env") or {}).items()}
     if config is None:
-        local = directory / "config"
-        config = load_config(local if local.exists() else None, env=env)
+        # A scenario pins its own config (manifest "config_dir", relative to the scenario), so
+        # the user's editable config/ folder can't change a recorded day's golden output.
+        local = directory / str(manifest.get("config_dir") or "config")
+        fallback = os.environ.get("GEMBOT_CONFIG_DIR")  # the manifest env holds only fake secrets
+        config = load_config(local if local.exists() else fallback, env=env)
     start = _parse_time(manifest["start"])
     fake = FakeDiscord(guilds=[str(manifest.get("guild_id", "424242424242424242"))])
     roles: dict[str, str] = {}

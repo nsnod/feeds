@@ -22,17 +22,14 @@
 feeds:
   - name: "GameGil (@officialgamegil)"
     url: "https://rss.app/feeds/K1vwmXudAkt1exqO.xml"
-    source: instagram        # or: tiktok
-    audience: 8357     # their follower count, typed by you
+    source: instagram
+    audience: 8357           # their follower count, typed by you
 
-    feeds:
   - name: "Hellmei (@Hellmeitv)"
     url: "https://rss.app/feeds/5KcRbde1HFqAzPdx.xml"
-    source: instagram        # or: tiktok
-    audience: 6580        # their follower count, typed by you
+    source: instagram
+    audience: 6580
 
   - name: "KreekCraft (YouTube)"
-    url: "https://www.youtube.com/feeds/videos.xml?channel_id=UCUCxsk7hqE_CwZWGEJEkGanbA"
+    url: "https://www.youtube.com/feeds/videos.xml?channel_id=UCxsk7hqE_CwZWGEJEkGanbA"
     source: youtube
-
-feeds: [2]

@@ -6,6 +6,7 @@ python -m gembot smoke [--post-test] [--summary PATH]
 python -m gembot connect-once
 python -m gembot replay tests/fixtures/scenario_day/ [--check | --update-golden]
 python -m gembot init-state [--repo-dir .]   # prints the state branch name
+python -m gembot check-config
 """
 
 from __future__ import annotations
@@ -72,6 +73,8 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--check", action="store_true", help="fail if the output differs from expected.json")
     mode.add_argument("--update-golden", action="store_true", help="rewrite expected.json")
 
+    sub.add_parser("check-config", help="validate config/*.yaml (feeds, settings, sources, blocklist)")
+
     init = sub.add_parser("init-state", help="create the orphan bot-state branch if it is missing")
     init.add_argument("--repo-dir", type=Path, default=Path("."))
     return parser
@@ -80,6 +83,17 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     _setup_logging(args.verbose)
+
+    if args.command == "replay":  # a recorded day brings its own pinned config
+        from gembot.replay import run_replay
+
+        return run_replay(
+            args.directory, config_dir=args.config_dir, check=args.check, update=args.update_golden
+        )
+
+    if args.command == "check-config":
+        return check_config(args.config_dir)
+
     try:
         config = load_config(args.config_dir)
     except ConfigError as exc:
@@ -136,13 +150,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
         return 0 if connect_gateway_once(token) else 1
 
-    if args.command == "replay":
-        from gembot.replay import run_replay
-
-        return run_replay(
-            args.directory, config_dir=args.config_dir, check=args.check, update=args.update_golden
-        )
-
     if args.command == "init-state":
         from gembot.state.store import state_branch_status
 
@@ -156,6 +163,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     return 2  # pragma: no cover - argparse enforces the choices
+
+
+def check_config(config_dir: Path | None) -> int:
+    """Validate the config folder (CI runs this on your config/): 0 = usable, 1 = problems."""
+    try:
+        config = load_config(config_dir, env={})
+    except ConfigError as exc:
+        print(f"config problem: {exc}")
+        return 1
+    feeds = config.feeds.feeds
+    print(f"config OK ({config.config_dir}): {len(feeds)} feed(s)")
+    for feed in feeds:
+        state = "" if feed.enabled else " (paused)"
+        print(f"  - {feed.name} [{feed.source}]{state}: {feed.url}")
+    return 0
 
 
 def _env_path(name: str) -> Path | None:

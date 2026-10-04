@@ -812,6 +812,7 @@ RUNS: list[dict[str, Any]] = [
 def main() -> None:
     manifest: dict[str, Any] = {
         "start": "2026-10-03T06:00:00Z",
+        "config_dir": "../config",  # the pinned test config, not the user's config/ folder
         # Fake credentials so every source takes part. Never put real secrets here.
         "env": {
             "REDDIT_CLIENT_ID": "scenario-client",

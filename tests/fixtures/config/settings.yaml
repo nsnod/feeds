@@ -1,0 +1,135 @@
+# GemBot settings. Every threshold, cap and interval lives here.
+# Edit, commit, and the next scheduled run picks it up. See docs/SCORING.md for what
+# each number means. Missing keys fall back to the defaults in gembot/config.py.
+
+run:
+  user_agent: "GemBot/0.1 (+https://github.com/nsnod/feeds; indie game discovery bot)"
+  http_timeout_s: 15
+  http_retries: 2          # extra attempts after a 429/5xx (each one costs budget)
+  max_backoff_s: 20        # never wait longer than this on a single 429
+  shortlist_size: 40       # games that get the expensive enrichment each run
+  max_comments_per_post: 100
+  comment_refresh_hours: 6
+  collect_seconds: 180     # sources stop after this long (the scan job is killed at 8 minutes)
+  network_seconds: 300     # enrichment stops after this long, so posting + saving always fit
+
+# Hard cap on HTTP requests per source per run (be polite!).
+budgets:
+  steam: 60
+  reddit: 60
+  itch: 12
+  bluesky: 40
+  rss: 30
+  x: 5
+  resolver: 15             # following shortened links (bit.ly, t.co, ...)
+  llm: 40                  # optional Claude calls (only with ANTHROPIC_API_KEY)
+  discord: 150
+  discord_feedback: 40     # 👍/👎 reaction reads per run
+
+# Starting weights for the Gem Score. The bot nudges these from your 👍/👎;
+# the learned values live in state (weights.json), these are only the defaults.
+weights:
+  velocity: 0.25
+  underdog: 0.15
+  cross: 0.15
+  fit: 0.15
+  hype: 0.15
+  meme: 0.05
+  fresh: 0.10
+
+features:
+  velocity_log2_divisor: 4       # clamp(log2(x normal)/4): 16x normal = 1.0
+  baseline_window_days: 14
+  baseline_min_samples: 8
+  default_baseline_eph:          # engagement/hour assumed until a channel has enough history
+    reddit: 3.0
+    bluesky: 1.0
+    x: 2.0
+    youtube: 5.0
+    instagram: 5.0
+    tiktok: 10.0
+    rss: 1.0
+  itch_list_full_hours: 24
+  underdog_min_audience: 100
+  cross_window_hours: 72
+  cross_map: {1: 0.0, 2: 0.6, 3: 0.85, 4: 1.0}
+  meme_divisor: 5
+  meme_min_comments: 10
+  hype_full_intent_commenters: 15
+  hype_confident_commenters: 10  # 1 "wishlisted!" out of 2 replies counts less than 10 out of 20
+  velocity_min_age_hours: 1.0    # a 10-minute-old post is treated as 1 hour old
+  fresh_full_hours: 48
+  fresh_zero_days: 14
+  fresh_coming_soon_bonus: 0.2
+
+penalties:
+  negativity_threshold: 0.30     # share of sampled commenters calling it a scam/asset flip/...
+  negativity_min_commenters: 3   # tiny minimum so 1 grumpy reply out of 2 is not "50% negative"
+  negativity_points: 15
+  old_release_days: 30
+  old_release_points: 20
+  spammer_posts: 3               # same author posting the same game more than 3 times...
+  spammer_window_days: 7         # ...in 7 days
+  spammer_points: 10
+
+bonuses:
+  roblox_points: 8
+  roblox_meme_min: 0.6
+  roblox_velocity_min: 0.4
+  roblox_comments_min: 30
+
+decisions:
+  alarm_score: 72
+  alarm_min_signals: 2
+  alarm_signal_thresholds: {velocity: 0.5, hype: 0.5, cross: 0.6, meme: 0.6}
+  max_alarms_per_run: 3
+  max_alarms_per_day: 12
+  roundup_score: 45
+  roundup_max_items: 8
+  roundup_interval_minutes: 115  # scan runs every 30 min, so this means "every 2 hours"
+  roundup_lookback_hours: 48
+  heating_up_delta: 15
+
+feedback:
+  enabled: true
+  max_post_age_days: 7
+  learning_rate: 0.05
+  weight_min: 0.02
+  weight_max: 0.5
+  up_emoji: "👍"
+  down_emoji: "👎"
+  weekly_note_days: 7
+  recheck_minutes: 25
+
+discord:
+  api_base: "https://discord.com/api/v10"
+  category_name: "GemBot"
+  alarm_channel: "gem-alarm"
+  roundup_channel: "gem-roundup"
+  status_channel: "gembot-status"
+  status_failure_threshold: 6
+  max_links_in_alarm: 5
+
+state:
+  branch: "bot-state"      # if you rename it, also update branches-ignore in .github/workflows/ci.yml
+  games_days: 30
+  seen_days: 14
+  posted_days: 30
+  alarm_memory_days: 365
+  http_cache_days: 7
+  max_labels: 5000
+  max_bytes: 5000000
+  push_retries: 3
+
+# GitHub turns off scheduled workflows in PUBLIC repos after 60 days without repository
+# activity (bot commits to the bot-state branch may not count). GemBot reminds you in
+# #gembot-status to push any small commit to the main branch.
+keepalive:
+  remind_after_days: 45
+  remind_every_days: 7
+
+llm:
+  model: "claude-haiku-4-5-20251001"
+  max_calls: 40
+  api_base: "https://api.anthropic.com"
+  timeout_s: 30

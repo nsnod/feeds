@@ -1,0 +1,4 @@
+# Test copy: the tests run against this pinned config (tests/fixtures/config/), never against
+# your own config/ folder, so tuning settings.yaml or adding feeds can't break CI.
+# CI checks your config/ separately with `python -m gembot check-config`.
+feeds: []

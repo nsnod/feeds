@@ -1,0 +1,204 @@
+# Where GemBot looks. Edit freely; see README.md -> "Tuning".
+
+steam:
+  enabled: true
+  cc: us
+  lang: english
+  # Steam user-tag IDs (verified, see docs/VERIFICATION.md)
+  tags:
+    indie: 492
+    coop: 1685
+    online_coop: 3843
+    multiplayer: 3859
+  # store.steampowered.com/search/results/ queries. "tags" is a comma list of tag IDs (AND).
+  searches:
+    - name: comingsoon-indie-online-coop
+      params: {filter: comingsoon, tags: "492,3843", category1: 998, sort_by: Released_DESC}
+    - name: comingsoon-indie-coop
+      params: {filter: comingsoon, tags: "492,1685", category1: 998, sort_by: Released_DESC}
+    - name: comingsoon-indie-multiplayer
+      params: {filter: comingsoon, tags: "492,3859", category1: 998, sort_by: Released_DESC}
+    - name: popular-comingsoon-indie-coop
+      params: {filter: popularcomingsoon, tags: "492,1685", category1: 998}
+  featured_categories: true      # also read api/featuredcategories "coming_soon" / "new_releases"
+  # appdetails category IDs (verified, see docs/VERIFICATION.md)
+  coop_category_ids: [9, 38, 39, 48]        # Co-op, Online Co-op, Shared/Split Screen Co-op, LAN Co-op
+  multiplayer_category_ids: [1, 27, 36, 49] # Multi-player, Cross-Platform Multiplayer, Online PvP, PvP
+  early_access_genre_id: 70
+  max_new_apps_per_run: 25       # appdetails calls per run (new apps first, then stale ones)
+  appdetails_refresh_hours: 24   # stored appdetails younger than this are reused
+  page_size: 50                  # search rows per request ("count")
+  exclude_tags: [128]            # "untags": Massively Multiplayer
+  request_interval_s: 2.0        # store.steampowered.com allows ~200 requests / 5 min per IP;
+                                 # the first 429/403 stops Steam for the run (blocks last ~5 min)
+  # "comingsoon" searches crawl a rotating window of max_pages pages per run (cursor kept in
+  # state); "popular*" searches always read page 1 and record each game's rank.
+  track_followers: false         # no keyless follower API exists (see VERIFICATION.md)
+
+reddit:
+  enabled: true
+  subreddits:
+    - IndieGaming
+    - indiegames
+    - IndieDev
+    - playmygame
+    - CoOpGaming
+    - SoloDevelopment
+    - DestroyMyGame
+    - godot
+    - Unity3D
+    - unrealengine
+    - gamedev
+  listings: [new, rising]
+  limit: 50
+  comments_limit: 100
+  max_post_age_hours: 72
+  new_max_pages: 2               # OAuth only: page /new when a full page is all new posts
+  # Without REDDIT_CLIENT_ID/SECRET GemBot reads ONE combined RSS feed per run (no scores or
+  # comment counts). Reddit retires RSS on this date; after it, Reddit needs API credentials.
+  rss_limit: 100
+  rss_retirement_date: "2026-11-13"
+  try_public_json: false         # anonymous .json is blocked (HTTP 403) since 2026-05-29
+  # Subscriber counts (approx., Apr 2026) used for the underdog math when RSS cannot report them.
+  fallback_subscribers:
+    gamedev: 1900000
+    Unity3D: 409000
+    IndieGaming: 390000
+    unrealengine: 270000
+    IndieDev: 263000
+    godot: 252000
+    indiegames: 235000
+    playmygame: 105000
+
+# itch.io browse pages + ".xml" = RSS 2.0, 36 items per page, item order = listing rank.
+# Tag slugs are itch's canonical ones ("co-op", never "coop"; unverified live, see
+# docs/VERIFICATION.md). Combined sort+tag URLs (new-and-popular/tag-X) may get a
+# Cloudflare challenge on GitHub runners. Then, once per run, the feed's fallback is read:
+#   * default below: the sort-only newest feed (single facet; reported to pass while
+#     sort+tag pages looped), keeping only games whose name / description / genre / URL
+#     slug match one of fallback_keywords. No rank: newest is not a popularity order.
+#     It reuses the page the "newest" feed already fetched, so it costs no extra request.
+#   * alternative: fallback_url: "https://itch.io/games/tag-<slug>.xml" with
+#     fallback_ranked: true and no keywords. That is the all-time "Top" order of the tag:
+#     a rank-within-tag signal, but new games almost never appear in it.
+#   * no fallback_url: the feed is just recorded as blocked for this run.
+# After one challenge the other feeds go straight to their fallbacks (for
+# fallback_hold_hours), and after max_challenges blocks the remaining itch feeds are skipped.
+itch:
+  enabled: true
+  popular_feed: new-and-popular
+  request_interval_s: 1.0     # pause between itch requests (be polite)
+  max_challenges: 2           # Cloudflare challenges / 403s per run before giving up on itch
+  fallback_hold_hours: 6      # after a challenge, use fallbacks directly for this long
+  feeds:
+    - {name: new-and-popular, url: "https://itch.io/games/new-and-popular.xml"}
+    - {name: newest, url: "https://itch.io/games/newest.xml", ranked: false, max_pages: 2}
+    - name: tag-multiplayer
+      url: "https://itch.io/games/new-and-popular/tag-multiplayer.xml"
+      fallback_url: "https://itch.io/games/newest.xml"
+      fallback_keywords: [multiplayer, multi-player, "online co-op", pvp, "2-4 players", "1-4 players", "up to 4 players", "proximity chat"]
+    - name: tag-co-op
+      url: "https://itch.io/games/new-and-popular/tag-co-op.xml"
+      fallback_url: "https://itch.io/games/newest.xml"
+      fallback_keywords: [co-op, coop, cooperative, co-operative, "with friends", "with your friends"]
+    - name: tag-local-multiplayer
+      url: "https://itch.io/games/new-and-popular/tag-local-multiplayer.xml"
+      fallback_url: "https://itch.io/games/newest.xml"
+      fallback_keywords: ["local multiplayer", "local co-op", "couch co-op", split-screen, "split screen", "same screen", "shared screen"]
+    - name: tag-horror
+      url: "https://itch.io/games/new-and-popular/tag-horror.xml"
+      fallback_url: "https://itch.io/games/newest.xml"
+      fallback_keywords: [horror, scary, creepy, haunted, terrifying]
+    - name: tag-physics
+      url: "https://itch.io/games/new-and-popular/tag-physics.xml"
+      fallback_url: "https://itch.io/games/newest.xml"
+      fallback_keywords: [physics, physics-based, ragdoll, wobbly]
+
+bluesky:
+  enabled: true
+  terms:
+    - '"proximity chat"'
+    - "#indiedev co-op"
+    - "#screenshotsaturday multiplayer"
+    - '"wishlist" co-op'
+    - '"announce trailer" indie'
+    - friendslop
+    - '"co-op horror"'
+    - '"with friends" #indiegame'
+  limit: 50                      # posts per search request (max 100)
+  sort: latest
+  lang: en
+  search_pages: 1                # pages per term; each page is one request
+  max_post_age_hours: 72
+  # Search needs a login (BLUESKY_HANDLE + BLUESKY_APP_PASSWORD secrets); public search is blocked.
+  # The session is reused between runs (encrypted in the state branch) because bsky.social only
+  # allows about 10 logins per account per day.
+  pds_host: "https://bsky.social"          # login server
+  appview: "https://api.bsky.app"          # fallback search route (with the login token)
+  appview_proxy: "did:web:api.bsky.app#bsky_appview"
+  public_appview: "https://public.api.bsky.app"   # logged-out reads: replies and follower counts
+  max_sessions_per_day: 8        # new logins per 24h before GemBot waits
+  unauth_probe_hours: 24         # without a login: re-check whether public search works this often
+
+x:
+  enabled: true          # only runs when the X_BEARER_TOKEN secret is set (paid API, ~$0.005 per post read)
+  queries:               # each query: max 512 characters, X search syntax (uppercase OR)
+    - '("proximity chat" OR friendslop OR "co-op horror") (game OR steam OR wishlist) -is:retweet lang:en'
+  max_results: 25        # posts per query per run (10-100); every post returned is billed
+  sort_order: recency    # recency | relevancy
+  expand_authors: false  # true adds @usernames + follower counts, but each user returned costs ~$0.010
+  monthly_read_budget: 3000  # pause X for the rest of the month after this many posts+users (~$15)
+  api_base: "https://api.x.com/2"
+
+resolver:
+  fuzzy_threshold: 90
+  lookback_days: 30
+  shortener_hosts:
+    - bit.ly
+    - t.co
+    - tinyurl.com
+    - buff.ly
+    - ow.ly
+    - dlvr.it
+    - s.team
+    - goo.gl
+    - rebrand.ly
+    - linktr.ee
+
+# Friendslop / co-op fit keywords: phrase -> strength (0..1). Matched case-insensitively
+# against titles, post text, Steam descriptions and tags.
+fit_keywords:
+  "proximity chat": 1.0
+  "proximity voice": 1.0
+  "proximity voice chat": 1.0
+  "friendslop": 1.0
+  "with friends": 0.7
+  "with your friends": 0.7
+  "co-op horror": 0.9
+  "coop horror": 0.9
+  "online co-op": 0.8
+  "co-op": 0.6
+  "coop": 0.5
+  "1-4 players": 0.7
+  "2-4 players": 0.8
+  "up to 4 players": 0.7
+  "4 player": 0.6
+  "multiplayer": 0.4
+  "physics": 0.5
+  "physics-based": 0.6
+  "ragdoll": 0.7
+  "chaotic": 0.6
+  "chaos": 0.5
+  "party game": 0.6
+  "like lethal company": 1.0
+  "lethal company": 0.8
+  "content warning": 0.7
+  "r.e.p.o": 0.8
+  "repo-like": 0.8
+  "peak": 0.3
+  "me and the boys": 0.9
+  "with the boys": 0.8
+  "friends would love": 0.7
+  "streamer": 0.4
+  "funny": 0.3
+  "silly": 0.3

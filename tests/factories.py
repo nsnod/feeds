@@ -26,9 +26,13 @@ def read_fixture(*parts: str) -> str:
     return fixture_path(*parts).read_text(encoding="utf-8")
 
 
+# The pinned config the tests run against (never the user's editable config/ folder).
+TEST_CONFIG_DIR = ROOT / "tests" / "fixtures" / "config"
+
+
 def make_config(env: dict[str, str] | None = None, **overrides: Any) -> Config:
-    """The real config/*.yaml with optional env secrets; overrides replace top-level parts."""
-    config = load_config(ROOT / "config", env=env or {})
+    """The pinned test config with optional env secrets; overrides replace top-level parts."""
+    config = load_config(TEST_CONFIG_DIR, env=env or {})
     return config.model_copy(update=overrides) if overrides else config
 
 

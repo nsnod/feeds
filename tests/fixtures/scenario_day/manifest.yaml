@@ -1,4 +1,5 @@
 start: '2026-10-03T06:00:00Z'
+config_dir: ../config
 env:
   REDDIT_CLIENT_ID: scenario-client
   REDDIT_CLIENT_SECRET: scenario-secret

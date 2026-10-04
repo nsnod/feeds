@@ -28,7 +28,7 @@ from gembot.collectors.bluesky import (
 from gembot.config import load_config
 from gembot.http import Budget
 from gembot.models import Engagement, State
-from tests.factories import NOW, ROOT, make_config, make_http, make_mention, read_fixture
+from tests.factories import NOW, TEST_CONFIG_DIR, make_config, make_http, make_mention, read_fixture
 
 ENTRY = "https://bsky.social"
 PDS = "https://amanita.us-east.host.bsky.network"
@@ -148,7 +148,7 @@ def mock():
 
 
 def test_sources_yaml_has_bluesky_session_settings():
-    bsky = load_config(ROOT / "config", env={}).sources.bluesky
+    bsky = load_config(TEST_CONFIG_DIR, env={}).sources.bluesky
     assert bsky.max_sessions_per_day == 8
     assert bsky.unauth_probe_hours == 24
     assert bsky.search_pages == 1
