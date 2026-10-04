@@ -14,7 +14,7 @@ from gembot.collectors.base import CollectContext, Collector
 from gembot.discord.fake import FakeDiscord
 from gembot.discord.setup import run_setup
 from gembot.http import HttpError
-from gembot.models import Comment, GamePostState, Mention, State
+from gembot.models import Comment, GamePostState, LLMVerdict, Mention, State
 from gembot.pipeline import Pipeline, _append_snapshot, _merge_mention, decision_counts
 from tests.factories import NOW, make_config, make_http, make_mention
 
@@ -502,8 +502,6 @@ def test_mentions_pointing_at_aliased_games_follow_the_alias():
 
 
 def test_llm_verdict_is_used_once_and_can_exclude_non_games():
-    from gembot.models import LLMVerdict
-
     class FakeLLM:
         def __init__(self, verdict):
             self.verdict = verdict
@@ -569,3 +567,27 @@ def test_decision_counts_without_plan(count):
     from gembot.pipeline import RunResult
 
     assert decision_counts(RunResult(now=NOW)) == {"alarm": 0, "roundup": 0}
+
+
+def test_llm_title_replaces_a_heuristic_title_for_games_without_a_store_page():
+    class TitleLLM:
+        def classify(self, mention):
+            return LLMVerdict(game_title="Moon Soup Simulator", is_a_specific_game=True, friendslop_fit=0.9)
+
+        def close(self):
+            pass
+
+    world = World()
+    post = make_mention(
+        "reddit",
+        "ms1",
+        title='Finally showing "Moon Soup Simulator Teaser" - a co-op cooking game for 4 friends',
+        hours_ago=2,
+        likes=30,
+        comments=4,
+        channel="r/IndieGaming",
+    )
+    result = world.run(NOW, lambda ctx: {"reddit": StubCollector(ctx, [post])}, llm=TitleLLM())
+    game = world.state.games[world.state.mentions["reddit:ms1"].game_id]
+    assert game.title == "Moon Soup Simulator"
+    assert game.game_id in result.results

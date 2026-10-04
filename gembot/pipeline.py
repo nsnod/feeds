@@ -23,7 +23,7 @@ from gembot.discord.feedback import apply_feedback, collect_reactions, mark_week
 from gembot.discord.publish import Publisher, build_card
 from gembot.discord.rest import DiscordAPI
 from gembot.enrich.comments import enrich_audience, enrich_game_comments
-from gembot.enrich.entity import LinkExpander, Resolver, ResolveResult, apply_steam_info
+from gembot.enrich.entity import LinkExpander, Resolver, ResolveResult, apply_llm_title, apply_steam_info
 from gembot.enrich.llm import LLMClassifier, build_llm
 from gembot.http import Budget, HttpClient
 from gembot.models import (
@@ -393,6 +393,8 @@ class Pipeline:
                     if verdict is not None:
                         game.llm = verdict
                         game.pitch = game.pitch or verdict.one_line_pitch
+                        if verdict.is_a_specific_game and apply_llm_title(game, verdict.game_title):
+                            log.info("LLM retitled %s as %r", game_id, game.title)
 
     # ------------------------------------------------------------------ 5 score
     def score(self, shortlist: list[str], weights: dict[str, float]) -> None:
