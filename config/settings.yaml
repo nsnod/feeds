@@ -64,7 +64,7 @@ features:
 
 penalties:
   negativity_threshold: 0.30     # share of sampled commenters calling it a scam/asset flip/...
-  negativity_min_commenters: 5
+  negativity_min_commenters: 3   # tiny minimum so 1 grumpy reply out of 2 is not "50% negative"
   negativity_points: 15
   old_release_days: 30
   old_release_points: 20

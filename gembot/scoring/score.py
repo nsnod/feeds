@@ -23,6 +23,7 @@ from gembot.models import (
     FEATURE_NAMES,
     Adjustment,
     CommentSignals,
+    Evidence,
     Features,
     Game,
     Mention,
@@ -66,15 +67,29 @@ def company_matches(name: str, company: str) -> bool:
     return bool(wanted) and have[: len(wanted)] == wanted
 
 
-def _company_names(game: Game, steam: SteamInfo | None) -> list[tuple[str, str]]:
-    names: list[tuple[str, str]] = []
+def _poster_names(mentions: Iterable[Mention]) -> set[str]:
+    """Lowercased authors of the game's social posts (store listings are not posts by a person)."""
+    return {m.author.strip().lower() for m in mentions if m.author and m.source not in LISTING_SOURCES}
+
+
+def _company_names(
+    game: Game, steam: SteamInfo | None, mentions: Iterable[Mention] = ()
+) -> list[tuple[str, str, bool]]:
+    """``(role, name, is_username)`` for every developer / publisher name the game carries.
+
+    ``is_username`` marks a ``game.developer`` that is really the username of someone who
+    posted about the game (the resolver's guess for "my game ..." posts): u/Valve_Index_Fan is
+    not Valve, so such a name only matches a company it spells out exactly.
+    """
+    names: list[tuple[str, str, bool]] = []
     if game.developer:
-        names.append(("developer", game.developer))
+        is_username = game.developer.strip().lower() in _poster_names(mentions)
+        names.append(("developer", game.developer, is_username))
     if game.publisher:
-        names.append(("publisher", game.publisher))
+        names.append(("publisher", game.publisher, False))
     if steam is not None:
-        names += [("developer", d) for d in steam.developers if d]
-        names += [("publisher", p) for p in steam.publishers if p]
+        names += [("developer", d, False) for d in steam.developers if d]
+        names += [("publisher", p, False) for p in steam.publishers if p]
     return names
 
 
@@ -88,9 +103,13 @@ def _keyword_texts(game: Game, mentions: Iterable[Mention]) -> list[str]:
 def blocklist_reason(game: Game, mentions: list[Mention], blocklist: Blocklist) -> str | None:
     """Why this game must never be posted (big studio / banned keyword), or None."""
     steam = steam_info_for(game, mentions)
-    for role, name in _company_names(game, steam):
+    for role, name, is_username in _company_names(game, steam, mentions):
         for company in blocklist.companies:
-            if company_matches(name, company):
+            if is_username:
+                matched = bool(company_tokens(company)) and company_tokens(name) == company_tokens(company)
+            else:
+                matched = company_matches(name, company)
+            if matched:
                 return f"big studio: {company} ({role} {name!r})"
     if blocklist.keywords:
         blob = "\n".join(normalize_text(t) for t in _keyword_texts(game, mentions))
@@ -159,17 +178,17 @@ def _spammer_penalty(mentions: list[Mention], ctx: ScoringContext) -> Adjustment
     )
 
 
-def _roblox_bonus(
-    features: Features, comments: int, signals: CommentSignals | None, ctx: ScoringContext
-) -> Adjustment | None:
+def _roblox_bonus(features: Features, evidence: Evidence, ctx: ScoringContext) -> Adjustment | None:
+    """+8 when meme >= 0.6 and (velocity >= 0.4 or the game's discussion has 30+ comments)."""
     bs = ctx.settings.bonuses
     if features.meme < bs.roblox_meme_min:
         return None
-    if features.velocity < bs.roblox_velocity_min and comments < bs.roblox_comments_min:
+    if features.velocity < bs.roblox_velocity_min and evidence.total_comments < bs.roblox_comments_min:
         return None
-    jokers = signals.roblox_commenters if signals is not None else 0
     return Adjustment(
-        code="roblox_bonus", points=bs.roblox_points, detail=f"{jokers} commenters joking it's a Roblox game"
+        code="roblox_bonus",
+        points=bs.roblox_points,
+        detail=f"{evidence.meme_jokers} commenters joking it's a Roblox game",
     )
 
 
@@ -224,7 +243,7 @@ def _score(
         )
         if p is not None
     ]
-    bonus = _roblox_bonus(features, evidence.total_comments, signals, ctx)
+    bonus = _roblox_bonus(features, evidence, ctx)
     result.penalties = penalties
     result.bonuses = [bonus] if bonus is not None else []
     total = base + sum(b.points for b in result.bonuses) - sum(p.points for p in penalties)

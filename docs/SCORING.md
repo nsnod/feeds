@@ -23,9 +23,11 @@ real numbers, so you can see why the bot got excited.
 
 ### Two passes per run (to stay fast and polite)
 
-1. **Quick pass.** Every game seen recently gets a cheap score that uses only what the
-   bot already collected: how fast the posts are growing, the co-op keywords, and how new
-   the game is. The best 40 go on to the next pass (`run.shortlist_size`).
+1. **Quick pass.** Every game with a new or changed post in this scan (new likes, new
+   comments, a new rank), plus any alarm-worthy game from the last 48 hours that never got
+   its alarm out (for example because Discord was down), gets a cheap score. It uses only
+   what the bot already collected: how fast the posts are growing, the co-op keywords, and
+   how new the game is. The best 40 go on to the next pass (`run.shortlist_size`).
 2. **Careful pass.** For those 40, the bot reads up to 100 top comments per post, looks up
    the poster's follower count and the Steam page, then works out the full score.
 
@@ -69,11 +71,22 @@ Instagram 5/h, TikTok 10/h, RSS 1/h (`features.default_baseline_eph`).
 Only the main New & Popular feed counts. If the game hasn't been seen on the list for 6
 hours, it has dropped off and gets no itch velocity.
 
-**Steam** pages have no likes either. When follower tracking is switched on
-(`steam.track_followers` in `sources.yaml`), velocity is the follower growth per day:
-**+50% followers per day = 1.0**, +10% per day = 0.2. Growth is measured against at
-least 100 followers, so 2 → 8 followers isn't "+300%". Gaps shorter than 12 hours are
-treated as 12 hours, so a lucky half-hour doesn't count as a trend.
+**Steam** pages have no likes either. By default, velocity there comes from the game's
+**rank on Steam's own "popular upcoming" list** (Steam ranks it by wishlists and follows).
+Every Steam search in `sources.yaml` with a `popular…` filter counts as that list, and
+the formula is the same as itch.io's above: 0.6 × rank score + 0.4 × staying power, and
+nothing once the game has been off the list for 6 hours. A plain "coming soon" search
+result has no rank velocity.
+
+> **Example:** #2 of 50 on the popular upcoming list for 30 hours →
+> 0.6 × 0.98 + 0.4 × 1 = **0.99**.
+
+Follower growth is used only when follower tracking is switched on
+(`steam.track_followers` in `sources.yaml`, off by default because Steam has no keyless
+follower count): velocity is then the follower growth per day: **+50% followers per day =
+1.0**, +10% per day = 0.2. Growth is measured against at least 100 followers, so 2 → 8
+followers isn't "+300%". Gaps shorter than 12 hours are treated as 12 hours, so a lucky
+half-hour doesn't count as a trend.
 
 ### 2. Underdog: a big reaction for a small creator
 
@@ -129,7 +142,8 @@ the boys" or "my friends would love this".
   commenters**
 
 > **Example:** 30 commenters, 15 of them want it, 1 calls it a scam → ½ × 1 × 1 + ½ × 1 −
-> 1/30 = **0.97**. Two replies, one of them "wishlisted!" → ½ × 1 × 0.2 + ½ × 0.25 = **0.23**.
+> 1/30 = **0.97** (without the scam comment it would be 1.00). Two replies, one of them
+> "wishlisted!" → ½ × 1 × 0.2 + ½ × 0.25 = **0.23**.
 
 Without comments, hype is 0.
 
@@ -139,11 +153,13 @@ GemBot counts the **different people** joking that the game is a Roblox game or 
 ("roblox", "looks like roblox", "this is a roblox game", "fortnite creative map").
 
 * **meme = jokers ÷ 5**, capped at 1 (`features.meme_divisor`)
-* It only counts when the discussion has **at least 10 comments**
-  (`features.meme_min_comments`)
+* Jokes only count when **the post** they were made under has **at least 10 comments**
+  (`features.meme_min_comments`). Each post is checked on its own, and the jokers of all
+  posts that pass are added up.
 
 People are counted, not comments, so one person spamming "roblox" can't fake it. The
-10-comment minimum means five friends joking under a 6-comment post scores 0.
+10-comment minimum means five friends joking under a 6-comment post scores 0, even when
+another post about the same game is busy.
 
 ### 7. Fresh: how new is it?
 
@@ -167,8 +183,8 @@ and penalties below, then capped between 0 and 100.
 
 > **Worked example: "Gorilla Pizza Panic".** A solo dev posts the game's new Steam page
 > on r/SoloDevelopment (18,000 members). Within 3 hours it has 140 upvotes and 40
-> comments, and 15 of the 30 commenters say they wishlisted it. GemBot also found the
-> new Steam page (Online Co-op, coming soon) by itself 5 hours ago.
+> comments; 15 of the 30 commenters say they wishlisted it and 1 calls it a scam. GemBot
+> also found the new Steam page (Online Co-op, coming soon) by itself 5 hours ago.
 >
 > | ingredient | value | × weight | = points |
 > |---|---|---|---|
@@ -176,7 +192,7 @@ and penalties below, then capped between 0 and 100.
 > | underdog (180 reactions, 18,000 members) | 0.35 | 0.15 | 5.2 |
 > | cross (Reddit + Steam) | 0.60 | 0.15 | 9.0 |
 > | fit (Online Co-op, "proximity chat", "ragdoll") | 1.00 | 0.15 | 15.0 |
-> | hype (15 of 30 want it) | 0.97 | 0.15 | 14.5 |
+> | hype (15 of 30 want it, 1 calls it a scam) | 0.97 | 0.15 | 14.5 |
 > | meme | 0 | 0.05 | 0 |
 > | fresh (5 hours old, coming soon) | 1.00 | 0.10 | 10.0 |
 > | **Gem Score** | | | **74.5** |
@@ -191,6 +207,11 @@ and penalties below, then capped between 0 and 100.
   longer names that start with the company count too: "Ubisoft Montreal" matches
   "Ubisoft" and "Electronic Arts Inc." matches "Electronic Arts". A different name that
   merely starts with the same letters doesn't: "Blizzardo Games" is not "Blizzard".
+* The names checked are the Steam page's developers and publishers, and the developer
+  and publisher GemBot has on file for the game. When a "my game …" post is the only clue,
+  GemBot guesses that the poster is the developer. Such a guess is a **username**, not a
+  studio name, so it only counts when it is exactly the studio's name (an account called
+  "Ubisoft"): a solo dev posting as u/Valve_Index_Fan is not Valve.
 * If a banned keyword ("nft", "crypto", "play-to-earn", …) appears as a whole word in the
   game's name or in a post about it, the game is excluded.
 
@@ -198,7 +219,7 @@ and penalties below, then capped between 0 and 100.
 
 | penalty | when | points |
 |---|---|---|
-| Negativity | more than **30%** of the commenters (and at least 5 people) call it an asset flip, scam, AI slop, stolen or abandoned | −15 |
+| Negativity | more than **30%** of the sampled commenters call it an asset flip, scam, AI slop, stolen or abandoned. At least **3** people must have commented (`penalties.negativity_min_commenters`), so one grumpy reply out of two isn't "50% negative"; 3 of 4 is. | −15 |
 | Old release | the Steam page shows an exact release date **more than 30 days ago**. Steam lists the Early Access launch date as the release date, so a **new** Early Access launch is never penalised; a game that went into Early Access months ago is. No exact date, no penalty. | −20 |
 | Self-promo spammer | the **same person** posted the **same game more than 3 times in 7 days** on one platform. Store listings don't count. | −10 |
 
@@ -211,8 +232,9 @@ When lots of people joke "this is just a Roblox game", lots of people are *looki
 it*. Games like that often blow up with streamers, which is exactly what you want to know
 about. So GemBot treats the jokes as **attention**, not as negativity:
 
-* **+8 points** when meme ≥ 0.6 (at least 3 different jokers on a post with 10+
-  comments) **and** either velocity ≥ 0.4 **or** the discussion has 30+ comments.
+* **+8 points** when meme ≥ 0.6 (at least 3 different jokers under posts that have 10+
+  comments each) **and** either velocity ≥ 0.4 **or** the game's discussion has 30+
+  comments (all its posts together).
 * When the bonus applies, the post **always** includes the line "🧱 Roblox-clone
   discourse: N commenters joking it's a Roblox game".
 
@@ -232,7 +254,8 @@ A game alarms when **all** of these are true:
 2. At least **2** of these 4 signals (`decisions.alarm_min_signals`):
    velocity ≥ 0.5 · hype ≥ 0.5 · cross ≥ 0.6 · meme ≥ 0.6. A good score alone isn't
    enough: something has to actually be happening.
-3. The game has **never** alarmed before. Each game alarms at most once, ever.
+3. The game hasn't alarmed before. Each game alarms at most once a year: the bot
+   remembers an alarm for 365 days (`state.alarm_memory_days`).
 
 **Caps against spam:** at most **3 alarms per run** and **12 per day** (the day resets at
 midnight UTC). If more games qualify, the highest scores win. The extras go to the
@@ -285,13 +308,23 @@ the most points (weight × ingredient), each with real numbers:
 * "15 different people said they wishlisted or want to play with friends"
 * "🧱 Roblox-clone discourse: 12 commenters joking it's a Roblox game"
 * "#3 on itch.io New & Popular for 9h"
+* "#2 on Steam's popular upcoming list for 30h"
 * "Small creator: 2,100 followers, 480 likes"
+* "Big reaction for a small sub: 300 upvotes in r/CoOpGaming (8,400 members)"
 * "Friendslop fit: proximity chat, co-op horror"
 * "Steam page: Online Co-op, coming soon"
 * "New Steam page, first seen 5h ago"
 
 Reddit counts *upvotes* and *comments*; Bluesky and X count *likes*, *replies* and
-*reposts*.
+*reposts*. The underdog line always quotes the post that earned the underdog points,
+which is often not the fastest-growing post.
+
+**Always at least 2.** When only one ingredient has something to say, the bot adds a
+plainer second line, in this order: a general line for a strong ingredient that had no
+numbers to quote ("Big reaction for the size of its audience"), facts from the Steam page
+("Steam page: Action, Indie, $4.99"), when GemBot first spotted the game ("First spotted 9
+days ago") and where it was seen ("Spotted on r/IndieDev"). Only a game with nothing at
+all to say gets a single line.
 
 ---
 
@@ -343,6 +376,7 @@ the new numbers. Change one or two knobs at a time and watch for a few days.
 | **Velocity reacts sooner** | lower `features.velocity_log2_divisor` | 4 → 3 (8× normal = full marks) |
 | **Care less about Roblox jokes** | lower `bonuses.roblox_points` | 8 → 4 |
 | **Softer on negativity** | raise `penalties.negativity_threshold` | 0.30 → 0.40 |
+| | or ask for more commenters first: `penalties.negativity_min_commenters` | 3 → 5 |
 | **New co-op words** | add them to `fit_keywords` in `sources.yaml` | `"push to talk": 0.6` |
 | **Hide a studio** | add it to `companies` in `blocklist.yaml` | `- Some Big Publisher` |
 

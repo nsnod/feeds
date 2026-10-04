@@ -4,12 +4,12 @@ Every feature is documented for humans in ``docs/SCORING.md``; the constants tha
 in ``settings.yaml`` are module-level names below so they are easy to find and test.
 
 * ``velocity``  engagement per hour vs that channel's normal (itch: rank on the popular
-  list; Steam: community follower growth when it is tracked)
+  list; Steam: rank on the "popular upcoming" list, or follower growth when it is tracked)
 * ``underdog``  big reaction for a small creator / small community
 * ``cross``     how many different platforms talk about it right now
 * ``fit``       friendslop / co-op fit (Steam categories, keywords, optional LLM verdict)
 * ``hype``      do commenters actually want it (wishlist / "me and the boys" / day one)
-* ``meme``      "it's a Roblox game" jokes (attention, not negativity)
+* ``meme``      "it's a Roblox game" jokes under posts with 10+ comments (attention, not negativity)
 * ``fresh``     how new the game is to us (+ bonus for an upcoming Steam page)
 """
 
@@ -289,13 +289,25 @@ def _best_key(c: _Candidate) -> tuple[float, bool, int, datetime]:
 # ----------------------------------------------------------------------------- features
 
 
-def _underdog(mentions: list[Mention], ctx: ScoringContext) -> float:
+def _underdog(mentions: list[Mention], ctx: ScoringContext, evidence: Evidence | None = None) -> float:
     """``log10(1 + 1000 * engagement / max(audience, 100)) / 3`` for the most engaged mention
-    whose audience (followers / subreddit members) is known; 0 when no audience is known."""
+    whose audience (followers / subreddit members) is known; 0 when no audience is known.
+
+    The numbers of that mention are written to ``evidence.underdog_*`` so the "why" line
+    quotes the post that produced the value (not the velocity post).
+    """
     known = [m for m in mentions if m.author_audience is not None]
     if not known:
         return 0.0
     best = max(known, key=lambda m: (m.engagement.total, m.created_at))
+    if evidence is not None:
+        evidence.underdog_mention_key = best.key
+        evidence.underdog_source = best.source
+        evidence.underdog_channel = best.channel or best.source
+        evidence.underdog_likes = max(best.engagement.likes, 0)
+        evidence.underdog_comments = max(best.engagement.comments, 0)
+        evidence.underdog_shares = max(best.engagement.shares, 0)
+        evidence.underdog_audience = best.author_audience
     audience = max(int(best.author_audience or 0), ctx.settings.features.underdog_min_audience, 1)
     return clamp(math.log10(1.0 + 1000.0 * best.engagement.total / audience) / 3.0)
 
@@ -377,15 +389,47 @@ def total_comments(signals: CommentSignals | None, mentions: list[Mention]) -> i
     return max(signals.post_comment_count, signals.sampled, reported, 0)
 
 
-def meme_from_signals(signals: CommentSignals | None, comments: int, ctx: ScoringContext) -> float:
-    """``clamp(roblox_commenters / 5)``, only when the discussion has at least 10 comments.
+def post_comment_count(mention: Mention) -> int:
+    """How many comments one post has: the platform's count, or our sample when that is larger."""
+    signals = mention.signals
+    counts = [mention.engagement.comments, 0]
+    if signals is not None:
+        counts += [signals.post_comment_count, signals.sampled]
+    return max(counts)
 
-    Distinct commenters (not comments) are counted so one person spamming "roblox" can't fake it.
+
+def meme_jokers(signals: CommentSignals | None, mentions: list[Mention], ctx: ScoringContext) -> int:
+    """Distinct "it's a Roblox game" jokers that count towards ``meme``.
+
+    BUILD_SPEC 4.2: jokes are "counted only if the post has >= 10 comments". When the
+    mentions carry their own comment analysis (``Mention.signals``, stored per post by the
+    pipeline), the jokers are added up only over posts that have ``meme_min_comments`` comments
+    themselves, so five friends joking under a 6-comment post never count just because another
+    post about the game is busy. The result never exceeds the game-level count in ``signals``.
+
+    Without per-post signals the game-level ``signals`` and comment total are used. Without
+    ``signals`` (the cheap prefilter pass reads no comments) nothing counts.
     """
-    fs = ctx.settings.features
-    if signals is None or comments < fs.meme_min_comments:
-        return 0.0
-    return clamp(signals.roblox_commenters / (fs.meme_divisor or 5.0))
+    if signals is None:
+        return 0
+    minimum = ctx.settings.features.meme_min_comments
+    per_post = [m for m in mentions if m.signals is not None]
+    if not per_post:
+        if total_comments(signals, mentions) < minimum:
+            return 0
+        return max(signals.roblox_commenters, 0)
+    counted = sum(
+        max(m.signals.roblox_commenters, 0)
+        for m in per_post
+        if m.signals is not None and post_comment_count(m) >= minimum
+    )
+    return min(counted, max(signals.roblox_commenters, 0))
+
+
+def meme_from_jokers(jokers: int, ctx: ScoringContext) -> float:
+    """``clamp(jokers / 5)``. Distinct commenters (not comments) are counted, so one person
+    spamming "roblox" can't fake it."""
+    return clamp(jokers / (ctx.settings.features.meme_divisor or 5.0))
 
 
 def _fresh(game: Game, steam: SteamInfo | None, ctx: ScoringContext) -> float:
@@ -460,19 +504,19 @@ def compute_features(
     evidence.fit_hits = fit_hits
     evidence.llm_fit = llm_fit
 
-    comments = total_comments(signals, mentions)
-    evidence.total_comments = comments
+    evidence.total_comments = total_comments(signals, mentions)  # game level (Roblox bonus: 30+)
+    evidence.meme_jokers = meme_jokers(signals, mentions, ctx)
     if steam is not None:
         evidence.release_date_text = steam.release_date_text
         evidence.coming_soon = steam.coming_soon
 
     features = Features(
         velocity=clamp(velocity),
-        underdog=_underdog(mentions, ctx),
+        underdog=_underdog(mentions, ctx, evidence),
         cross=cross,
         fit=fit,
         hype=hype_from_signals(signals, fs.hype_full_intent_commenters, fs.hype_confident_commenters),
-        meme=meme_from_signals(signals, comments, ctx),
+        meme=meme_from_jokers(evidence.meme_jokers, ctx),
         fresh=_fresh(game, steam, ctx),
     )
     return features, evidence

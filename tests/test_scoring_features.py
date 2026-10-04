@@ -9,6 +9,7 @@ from datetime import date, timedelta
 import pytest
 
 from gembot.config import Sources
+from gembot.enrich.signals import analyze_comments, merge_signals
 from gembot.models import BaselineSample, CommentSignals, LLMVerdict, Snapshot, SteamInfo
 from gembot.scoring.features import (
     DEFAULT_FALLBACK_EPH,
@@ -19,10 +20,12 @@ from gembot.scoring.features import (
     compute_features,
     hype_from_signals,
     match_fit_keywords,
+    meme_jokers,
     ordered_platforms,
+    post_comment_count,
     steam_info_for,
 )
-from tests.factories import NOW, make_config, make_game, make_mention
+from tests.factories import NOW, make_comments, make_config, make_game, make_mention
 
 CONFIG = make_config()
 
@@ -406,7 +409,116 @@ def test_meme_total_comments_from_signals_when_mention_count_missing():
     features, evidence = features_for([m], signals=s)
     assert evidence.total_comments == 12
     assert features.meme == pytest.approx(0.4)
+    assert evidence.meme_jokers == 2
     assert features_for([m])[0].meme == 0.0
+
+
+# meme, per post (BUILD_SPEC 4.2: "counted only if the post has >= 10 comments"). The pipeline
+# stores each post's analysed comments on ``Mention.signals`` and passes the merged signals.
+
+
+def with_signals(mention, signals: CommentSignals):
+    mention.signals = signals
+    return mention
+
+
+def jokes(jokers: int, comments: int, *, sampled: int | None = None) -> CommentSignals:
+    sampled = comments if sampled is None else sampled
+    return CommentSignals(
+        sampled=sampled,
+        distinct_commenters=sampled,
+        roblox_comments=jokers,
+        roblox_commenters=jokers,
+        post_comment_count=comments,
+    )
+
+
+def test_meme_needs_10_comments_on_the_post_not_summed_over_posts():
+    """Two posts about one game, 6 comments each, 3 Roblox jokers under each: neither post
+    has 10 comments, so no joke counts, although the merged signals add up to 12 comments."""
+    texts = ["this looks like a roblox game lol"] * 3 + ["cool"] * 3
+    a = make_mention("reddit", "a", title="Moon Goblins co-op", likes=20, comments=6, channel="r/IndieDev")
+    b = make_mention("reddit", "b", title="Moon Goblins co-op", likes=20, comments=6, channel="r/indiegames")
+    a.signals = analyze_comments(
+        make_comments(texts, authors=[f"a{i}" for i in range(6)]), post_comment_count=6
+    )
+    b.signals = analyze_comments(
+        make_comments(texts, authors=[f"b{i}" for i in range(6)]), post_comment_count=6
+    )
+    signals = merge_signals([a.signals, b.signals])  # what enrich_game_comments returns
+    assert signals.roblox_commenters == 6 and signals.post_comment_count == 12
+    features, evidence = compute_features(make_game(), [a, b], ctx_with(), signals)
+    assert features.meme == 0.0
+    assert evidence.meme_jokers == 0
+
+
+def test_meme_jokes_on_a_6_comment_post_do_not_count_because_another_post_is_big():
+    """Scenario 5 holds even when the same game has another, busy post without jokes."""
+    flood = make_mention("reddit", "flood", title="Moon Goblins", likes=30, comments=6, channel="r/IndieDev")
+    calm = make_mention("bluesky", "calm", title="Moon Goblins", likes=30, comments=40, channel="bluesky")
+    flood.signals = analyze_comments(
+        make_comments(["roblox clone"] * 5 + ["ok"], authors=[f"u{i}" for i in range(6)]),
+        post_comment_count=6,
+    )
+    calm.signals = analyze_comments(
+        make_comments(["nice"] * 12, authors=[f"v{i}" for i in range(12)]), post_comment_count=40
+    )
+    signals = merge_signals([flood.signals, calm.signals])
+    assert signals.roblox_commenters == 5
+    features, evidence = compute_features(make_game(), [flood, calm], ctx_with(), signals)
+    assert features.meme == 0.0
+    assert evidence.meme_jokers == 0
+    assert evidence.total_comments == 46  # the game-level total is unchanged
+
+
+def test_meme_adds_up_jokers_of_busy_posts_only():
+    busy = with_signals(make_mention("reddit", "busy", comments=12), jokes(3, 12))
+    tiny = with_signals(make_mention("reddit", "tiny", comments=6), jokes(5, 6))
+    other = with_signals(make_mention("bluesky", "other", comments=25), jokes(1, 25))
+    no_sample = make_mention("reddit", "unsampled", comments=500)  # never analysed: nothing to count
+    merged = CommentSignals(roblox_commenters=9, post_comment_count=43, sampled=43, distinct_commenters=43)
+    features, evidence = features_for([busy, tiny, other, no_sample], signals=merged)
+    assert evidence.meme_jokers == 4  # 3 + 1; the 6-comment post's 5 jokers don't count
+    assert features.meme == pytest.approx(0.8)
+
+
+@pytest.mark.parametrize(
+    ("reported", "post_count", "sampled", "counts"),
+    [
+        (10, 0, 0, True),  # the platform's current count (it grew since we sampled)
+        (0, 10, 4, True),  # the count the post had when we sampled it
+        (0, 0, 10, True),  # our own sample
+        (9, 9, 9, False),
+    ],
+)
+def test_meme_post_comment_count_is_the_largest_known(reported, post_count, sampled, counts):
+    m = with_signals(make_mention(comments=reported), jokes(3, post_count, sampled=sampled))
+    assert post_comment_count(m) == max(reported, post_count, sampled)
+    assert post_comment_count(make_mention(comments=reported)) == reported  # not analysed yet
+    features, _ = features_for([m], signals=m.signals)
+    assert features.meme == (pytest.approx(0.6) if counts else 0.0)
+
+
+def test_meme_never_exceeds_the_game_level_joker_count():
+    """When the merged signals know that the same people joked under both posts, the
+    per-post sum is capped at the game-level count of different people."""
+    a = with_signals(make_mention("reddit", "a", comments=20), jokes(3, 20))
+    b = with_signals(make_mention("reddit", "b", comments=20), jokes(3, 20))
+    deduped = CommentSignals(roblox_commenters=3, post_comment_count=40, sampled=40, distinct_commenters=20)
+    features, evidence = features_for([a, b], signals=deduped)
+    assert evidence.meme_jokers == 3
+    assert features.meme == pytest.approx(0.6)
+    summed = CommentSignals(roblox_commenters=6, post_comment_count=40, sampled=40, distinct_commenters=40)
+    assert features_for([a, b], signals=summed)[1].meme_jokers == 6
+
+
+def test_meme_is_zero_without_comment_signals_even_with_stored_post_signals():
+    """The cheap prefilter pass reads no comments (signals=None): meme stays 0 like hype."""
+    m = with_signals(make_mention(comments=40), jokes(12, 40))
+    features, evidence = features_for([m], signals=None)
+    assert features.meme == 0.0 and features.hype == 0.0
+    assert evidence.meme_jokers == 0
+    assert meme_jokers(None, [m], ctx_with()) == 0
 
 
 # ----------------------------------------------------------------------------- fresh
