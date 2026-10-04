@@ -32,7 +32,7 @@ import tempfile
 from collections.abc import Callable, Sequence
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -743,10 +743,20 @@ def ensure_state_branch(
 ) -> bool:
     """Create the orphan state branch on ``remote`` if it does not exist yet.
 
+    Returns ``True`` if the branch was created, ``False`` if it already existed or could not
+    be created (logged; never raises). :func:`state_branch_status` tells the two apart.
+    """
+    return state_branch_status(repo_dir, branch, remote, run=run) == "created"
+
+
+def state_branch_status(
+    repo_dir: Path | str, branch: str = "bot-state", remote: str = "origin", *, run: Runner = subprocess.run
+) -> Literal["created", "exists", "error"]:
+    """Create the orphan state branch on ``remote`` if needed; say what happened.
+
     The branch gets a single commit containing only ``README.md``. It is built with git
     plumbing (hash-object / mktree / commit-tree / push), so the caller's checkout, index
-    and working tree are never touched. Returns ``True`` if the branch was created,
-    ``False`` if it already existed or could not be created (logged; never raises).
+    and working tree are never touched. Never raises: failures are logged and give "error".
     """
     cwd = Path(repo_dir)
     ref = f"refs/heads/{branch}"
@@ -755,32 +765,32 @@ def ensure_state_branch(
         if probe.returncode == 0 and any(
             line.endswith(f"\t{ref}") for line in (probe.stdout or "").splitlines()
         ):
-            return False
+            return "exists"
         if probe.returncode not in (0, 2):
             log.warning("state git: cannot check %s on %s: %s", ref, remote, _scrub(probe.stderr or ""))
-            return False
+            return "error"
 
         blob = _run_git(run, cwd, ["hash-object", "-w", "--stdin"], stdin=STATE_README)
         if blob.returncode != 0:
             log.warning("state git: hash-object failed: %s", _scrub(blob.stderr or ""))
-            return False
+            return "error"
         tree = _run_git(run, cwd, ["mktree"], stdin=f"100644 blob {blob.stdout.strip()}\tREADME.md\n")
         if tree.returncode != 0:
             log.warning("state git: mktree failed: %s", _scrub(tree.stderr or ""))
-            return False
+            return "error"
         identity = _identity_args(run, cwd)
         commit = _run_git(
             run, cwd, [*identity, "commit-tree", tree.stdout.strip(), "-m", "Create the GemBot state branch"]
         )
         if commit.returncode != 0:
             log.warning("state git: commit-tree failed: %s", _scrub(commit.stderr or ""))
-            return False
+            return "error"
         push = _run_git(run, cwd, ["push", "-q", remote, f"{commit.stdout.strip()}:{ref}"])
         if push.returncode != 0:
             log.warning("state git: pushing the new %s branch failed: %s", branch, _scrub(push.stderr or ""))
-            return False
+            return "error"
         log.info("state git: created orphan branch %s on %s", branch, remote)
-        return True
+        return "created"
     except Exception:  # pragma: no cover - defensive
-        log.exception("state git: ensure_state_branch failed")
-        return False
+        log.exception("state git: creating the state branch failed")
+        return "error"

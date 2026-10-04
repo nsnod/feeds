@@ -87,6 +87,18 @@ def test_scan_commits_and_pushes_to_the_state_branch(tmp_path, monkeypatch):
     assert {"meta.json", "games.json", "README.md"} <= set(files)
 
 
+def test_scan_reports_a_failed_state_push(tmp_path, monkeypatch):
+    for key, value in GIT_ENV.items():
+        monkeypatch.setenv(key, value)
+    state_dir = tmp_path / "state"
+    git(tmp_path, "init", "-q", "-b", "bot-state", str(state_dir))
+    git(state_dir, "remote", "add", "origin", str(tmp_path / "missing.git"))  # nowhere to push
+    result = run_scan(make_config(), state_dir=state_dir, now=NOW, transport=offline(), sleep=lambda s: None)
+    assert result.state_push_failed
+    assert any("could not push state" in w for w in result.warnings)
+    assert (state_dir / "meta.json").exists()  # still saved locally
+
+
 def test_make_discord_needs_a_token():
     assert make_discord(make_config(), make_http()) is None
     config = make_config(env={"DISCORD_BOT_TOKEN": "abc"})
@@ -237,7 +249,7 @@ def test_cli_dispatches_every_command(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(
         "gembot.replay.run_replay", lambda d, **kw: calls.setdefault("replay", {"dir": d, **kw}) and 0
     )
-    monkeypatch.setattr("gembot.state.store.ensure_state_branch", lambda d, branch: True)
+    monkeypatch.setattr("gembot.state.store.state_branch_status", lambda d, branch: "created")
     monkeypatch.setattr("gembot.discord.setup.connect_gateway_once", lambda token: True)
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
 
@@ -249,11 +261,26 @@ def test_cli_dispatches_every_command(monkeypatch, tmp_path, capsys):
     assert cli.main(["smoke", "--post-test", "--summary", str(tmp_path / "s.md")]) == 0
     assert calls["smoke"]["post_test"] and calls["smoke"]["summary_path"] == tmp_path / "s.md"
     assert cli.main(["replay", str(tmp_path), "--check"]) == 0 and calls["replay"]["check"]
+    capsys.readouterr()
     assert cli.main(["init-state", "--repo-dir", str(tmp_path)]) == 0
-    assert "created" in capsys.readouterr().out
+    assert capsys.readouterr().out.strip() == "bot-state"  # the workflow reads the branch name
+    monkeypatch.setattr("gembot.state.store.state_branch_status", lambda d, branch: "error")
+    assert cli.main(["init-state", "--repo-dir", str(tmp_path)]) == 1
     assert cli.main(["connect-once"]) == 2  # no token
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "abc")
     assert cli.main(["connect-once"]) == 0
+
+
+def test_cli_run_fails_the_job_when_the_state_could_not_be_pushed(monkeypatch):
+    def fake_run_scan(config, **kw):
+        from gembot.pipeline import RunResult
+
+        result = RunResult(now=kw["now"])
+        result.state_push_failed = True
+        return result
+
+    monkeypatch.setattr("gembot.runner.run_scan", fake_run_scan)
+    assert cli.main(["run"]) == 1
 
 
 def test_cli_reports_config_errors(tmp_path):

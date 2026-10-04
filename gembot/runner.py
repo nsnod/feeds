@@ -101,7 +101,10 @@ def run_scan(
                     retries=config.settings.state.push_retries,
                 )
                 if not ok:
-                    result.warnings.append("could not push state to the bot-state branch (see log)")
+                    result.state_push_failed = True
+                    result.warnings.append(
+                        f"could not push state to the {config.settings.state.branch} branch (see log)"
+                    )
             else:
                 log.info("%s is not a git checkout; state saved locally only", state_dir)
         return result

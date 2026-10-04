@@ -31,10 +31,11 @@ jobs:
 
       - name: Read-only copy of the state (channel ids), if it exists
         run: |
-          if git fetch --no-tags --depth=1 origin "+refs/heads/bot-state:refs/remotes/origin/bot-state" 2>/dev/null; then
-            git worktree add --detach state origin/bot-state
+          BRANCH="$(python -c 'from gembot.config import load_config; print(load_config().settings.state.branch)')"
+          if git fetch --no-tags --depth=1 origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" 2>/dev/null; then
+            git worktree add --detach state "origin/${BRANCH}"
           else
-            echo "No bot-state branch yet (run 'Setup GemBot' first if you want post_test)."
+            echo "No ${BRANCH} branch yet (run 'Setup GemBot' first if you want post_test)."
           fi
 
       - name: Smoke test every source

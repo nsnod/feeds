@@ -5,7 +5,7 @@ python -m gembot setup [--state-dir state] [--force-welcome] [--skip-gateway]
 python -m gembot smoke [--post-test] [--summary PATH]
 python -m gembot connect-once
 python -m gembot replay tests/fixtures/scenario_day/ [--check | --update-golden]
-python -m gembot init-state [--repo-dir .]
+python -m gembot init-state [--repo-dir .]   # prints the state branch name
 """
 
 from __future__ import annotations
@@ -98,6 +98,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         for warning in result.warnings:
             log.warning(warning)
+        if result.state_push_failed:
+            # fail the job: unsaved state means the next run would post the same alarms again
+            log.error("the state was not pushed to the %s branch", config.settings.state.branch)
+            return 1
         return 0
 
     if args.command == "setup":
@@ -140,10 +144,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     if args.command == "init-state":
-        from gembot.state.store import ensure_state_branch
+        from gembot.state.store import state_branch_status
 
-        created = ensure_state_branch(args.repo_dir, branch=config.settings.state.branch)
-        print("created" if created else "exists")
+        branch = config.settings.state.branch
+        status = state_branch_status(args.repo_dir, branch=branch)
+        if status == "error":
+            log.error("could not check or create the %s branch (see above)", branch)
+            return 1
+        log.info("state branch %s: %s", branch, status)
+        print(branch)  # stdout is just the branch name, for the workflow to use
         return 0
 
     return 2  # pragma: no cover - argparse enforces the choices

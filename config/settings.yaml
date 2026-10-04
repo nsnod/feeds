@@ -111,7 +111,7 @@ discord:
   max_links_in_alarm: 5
 
 state:
-  branch: "bot-state"
+  branch: "bot-state"      # if you rename it, also update branches-ignore in .github/workflows/ci.yml
   games_days: 30
   seen_days: 14
   posted_days: 30

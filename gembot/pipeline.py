@@ -67,6 +67,7 @@ class RunResult:
     labels: list[LabelExample] = field(default_factory=list)
     weekly_note: str | None = None
     warnings: list[str] = field(default_factory=list)
+    state_push_failed: bool = False  # set by run_scan
 
     def top(self, n: int = 10) -> list[ScoreResult]:
         ranked = [r for r in self.results.values() if not r.excluded]
