@@ -265,7 +265,7 @@ def test_unauthorized_errors_explain_token_and_gateway(client):
             ),
         ]
     )
-    with pytest.raises(DiscordError, match="connect to the Discord gateway once") as info:
+    with pytest.raises(DiscordError, match="connect to the gateway") as info:
         client.send_message("9", {"content": "hi"})
     assert info.value.code == 40001
     with pytest.raises(DiscordError) as info:
@@ -398,3 +398,14 @@ def test_fake_errors_and_failure_injection():
         with pytest.raises(DiscordError):
             fake.list_guilds()
     assert ("me",) in fake.calls
+
+
+def test_cloudflare_plain_text_403_gets_a_clear_hint():
+    import httpx as _httpx
+
+    from gembot.discord.rest import CLOUDFLARE_HINT, discord_error
+
+    response = _httpx.Response(403, text="error code: 1010")
+    err = discord_error(response, "POST", "/channels/1/messages")
+    assert err.hint == CLOUDFLARE_HINT
+    assert "Cloudflare" in str(err)

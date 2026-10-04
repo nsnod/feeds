@@ -13,7 +13,7 @@ On top of that this client:
   it waits ``X-RateLimit-Reset-After`` seconds (bounded) before the next call;
 * paces reactions (Discord allows about one reaction per 0.25 s per channel);
 * turns Discord's JSON errors into :class:`DiscordError` with the error ``code`` and a
-  plain-English hint (missing permissions, unknown channel, bot never connected, ...);
+  plain-English hint (missing permissions, unknown channel, bad token, Cloudflare block, ...);
 * defaults ``allowed_mentions`` to ``{"parse": []}`` so a message can never ping
   @everyone/@here or random users/roles by accident.
 """
@@ -47,9 +47,13 @@ REACTION_DELAY_S = 0.3
 _PASS_THROUGH = tuple(code for code in range(200, 500) if code != 429)
 
 GATEWAY_HINT = (
-    "A brand-new bot must connect to the Discord gateway once before it can send messages: "
-    "run the 'Setup GemBot' workflow (or `python -m gembot connect-once`) and try again. "
-    "If that does not help, the DISCORD_BOT_TOKEN secret is probably wrong or was reset."
+    "Check the DISCORD_BOT_TOKEN secret (it changes whenever the token is reset). Discord used to "
+    "require a brand-new bot to connect to the gateway once before posting; that rule is no longer "
+    "documented, but running the 'Setup GemBot' workflow (which connects once) does no harm."
+)
+CLOUDFLARE_HINT = (
+    "Discord's Cloudflare edge temporarily blocked this runner's IP address (this is not a GemBot or "
+    "token problem; GitHub runners share IPs). Nothing to do: the next run will try again."
 )
 PERMISSIONS = (
     "View Channels, Send Messages, Embed Links, Add Reactions, Read Message History and Manage Channels"
@@ -161,6 +165,9 @@ def discord_error(response: httpx.Response, method: str, path: str) -> DiscordEr
         message = str(body["message"]) if body.get("message") is not None else None
         details = _flatten_errors(body.get("errors"))
     hint = ERROR_HINTS.get(code) if code is not None else None
+    if body is None and status in (403, 429):
+        # Cloudflare answers bans with a plain-text body such as "error code: 1015" / "1010".
+        hint = CLOUDFLARE_HINT
     if hint is None and status == 401:
         hint = ERROR_HINTS[0]
     if message and "gateway" in message.lower():
