@@ -1,6 +1,7 @@
 """Stage B enrichment: fetch top comments / replies and author audiences for shortlisted games.
 
-Only the game's most-discussed posts are sampled (``max_posts``, default 2), comments are
+Only the game's most-discussed posts whose collector can actually read comments are sampled
+(``max_posts``, default 2; a source without ``fetch_comments`` never takes a slot), comments are
 re-fetched at most every ``run.comment_refresh_hours`` unless the post's comment count
 grew by 25% or more, and every fetch goes through ``Collector.safe_fetch_comments`` /
 ``safe_fetch_audience`` so a failing platform never breaks the run. A failed fetch keeps
@@ -66,8 +67,10 @@ def enrich_game_comments(
     eligible: list[tuple[Mention, Collector]] = []
     for mention in own:
         collector = collector_for(mention, collectors)
-        if collector is not None and (
-            mention.engagement.comments > 0 or mention.source in ALWAYS_FETCH_SOURCES
+        if (
+            collector is not None
+            and _implements_comments(collector)  # X has reply counts but no way to read replies
+            and (mention.engagement.comments > 0 or mention.source in ALWAYS_FETCH_SOURCES)
         ):
             eligible.append((mention, collector))
     eligible.sort(key=lambda pair: (-pair[0].engagement.comments, -pair[0].engagement.total, pair[0].key))
@@ -84,6 +87,10 @@ def enrich_game_comments(
             comments, post_author=mention.author, post_comment_count=mention.engagement.comments
         )
     return merge_signals([m.signals for m in own if m.signals is not None])
+
+
+def _implements_comments(collector: Collector) -> bool:
+    return type(collector).fetch_comments is not Collector.fetch_comments
 
 
 def _implements_audience(collector: Collector) -> bool:
