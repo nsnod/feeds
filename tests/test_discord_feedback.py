@@ -153,6 +153,74 @@ def test_skin_tones_count_as_the_same_vote_once_per_person(fake, publisher):
     assert collect(fake, posted) == {msg.message_id: (1, 1)}
 
 
+def test_reaction_users_are_paged_100_at_a_time(fake, publisher):
+    posted = PostedState()
+    msg = post_alarm(publisher, posted)
+    for user_id in range(2001, 2151):  # 150 people
+        fake.react(msg.channel_id, msg.message_id, "👍", str(user_id))
+    budget = Budget("discord_feedback", 10)
+    assert collect(fake, posted, budget=budget) == {msg.message_id: (150, 0)}
+    pages = [c for c in fake.calls if c[0] == "get_reaction_users"]
+    assert len(pages) == 2 and budget.used == 3  # get_message + 2 pages
+
+
+def test_paging_stops_when_a_page_makes_no_progress():
+    page = [{"id": "5"}] * 100  # a broken API that keeps returning the same full page
+    calls = []
+
+    def users(c, m, e, limit=100, after=None, burst=False):
+        calls.append(after)
+        return page
+
+    api = SimpleNamespace(
+        get_message=lambda c, m: {"reactions": [{"emoji": {"name": "👍"}, "count": 101}]},
+        get_reaction_users=users,
+    )
+    message = PostedMessage(
+        message_id="1",
+        channel_id="2",
+        kind="alarm",
+        posted_at=POSTED_AT,
+        entries=[{"game_id": "g", "score": 1}],
+    )
+    assert fb.count_human_reactions(
+        api, message, settings=SETTINGS, budget=Budget("b", 10), bot_user_id=None
+    ) == (
+        1,
+        0,
+    )
+    assert calls == [None, "5"]
+
+
+def test_super_reactions_count_and_old_style_counts_work(fake, publisher):
+    posted = PostedState()
+    msg = post_alarm(publisher, posted)
+    fake.react(msg.channel_id, msg.message_id, "👍", "7", burst=True)  # a super reaction
+    fake.react(msg.channel_id, msg.message_id, "👎", "8", burst=True)
+    fake.react(msg.channel_id, msg.message_id, "👎", "8")  # same person, both kinds: one vote
+    assert collect(fake, posted) == {msg.message_id: (1, 1)}
+
+    old_style = SimpleNamespace(  # no count_details: count minus the bot's own reactions
+        get_message=lambda c, m: {"reactions": [{"emoji": {"name": "👍"}, "count": 2, "me": True}]},
+        get_reaction_users=lambda c, m, e, limit=100: [{"id": "1000", "bot": True}, {"id": "7"}],
+    )
+    assert fb.count_human_reactions(
+        old_style, msg, settings=SETTINGS, budget=Budget("b", 5), bot_user_id="1000"
+    ) == (1, 0)
+
+
+def test_blocked_discord_stops_reading_for_this_run(fake, publisher):
+    posted = PostedState()
+    first = post_alarm(publisher, posted, "A", at=POSTED_AT - timedelta(minutes=5))
+    second = post_alarm(publisher, posted, "B")
+    fake.fail("get_message", DiscordError("blocked", 403, blocked=True))
+    assert collect(fake, posted) == {}
+    assert [c for c in fake.calls if c[0] == "get_message"] == [
+        ("get_message", first.channel_id, first.message_id)
+    ]
+    assert first.reactions_checked_at is None and second.reactions_checked_at is None
+
+
 def test_custom_emoji_settings_are_matched_by_name_and_id():
     settings = FeedbackSettings(up_emoji="gem:42", down_emoji="👎")
     api = SimpleNamespace(

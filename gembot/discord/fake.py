@@ -70,23 +70,36 @@ class FakeDiscord:
         """Make ``method`` raise ``error`` (``times`` calls in a row, or forever when None)."""
         self.failures[method] = (error, times)
 
-    def react(self, channel_id: str, message_id: str, emoji: str, user_id: str, bot: bool = False) -> None:
-        """Add a reaction as ``user_id`` (tests / replay)."""
+    def react(
+        self,
+        channel_id: str,
+        message_id: str,
+        emoji: str,
+        user_id: str,
+        bot: bool = False,
+        burst: bool = False,
+    ) -> None:
+        """Add a reaction as ``user_id`` (tests / replay). ``burst`` = a super reaction.
+
+        Like Discord, user objects carry ``"bot": True`` only for bots (the key is absent otherwise).
+        """
         message = self._message(channel_id, message_id)
         user: dict[str, Any] = {"id": str(user_id), "username": f"user{user_id}"}
         if bot:
             user["bot"] = True
-        users = message["reactions"].setdefault(emoji, [])
+        users = message["burst" if burst else "reactions"].setdefault(emoji, [])
         if all(u["id"] != user["id"] for u in users):
             users.append(user)
 
-    def unreact(self, channel_id: str, message_id: str, emoji: str, user_id: str) -> None:
-        message = self._message(channel_id, message_id)
-        users = [u for u in message["reactions"].get(emoji, []) if u["id"] != str(user_id)]
+    def unreact(
+        self, channel_id: str, message_id: str, emoji: str, user_id: str, burst: bool = False
+    ) -> None:
+        store = self._message(channel_id, message_id)["burst" if burst else "reactions"]
+        users = [u for u in store.get(emoji, []) if u["id"] != str(user_id)]
         if users:
-            message["reactions"][emoji] = users
+            store[emoji] = users
         else:
-            message["reactions"].pop(emoji, None)
+            store.pop(emoji, None)
 
     def messages_in(self, channel_id: str) -> list[dict]:
         return [m for m in self.messages.values() if m["channel_id"] == channel_id]
@@ -155,7 +168,8 @@ class FakeDiscord:
             "id": message_id,
             "channel_id": channel_id,
             "payload": body,
-            "reactions": {},
+            "reactions": {},  # emoji -> users (normal reactions)
+            "burst": {},  # emoji -> users (super reactions)
         }
         self.sent.append((channel_id, body))
         return {"id": message_id, "channel_id": channel_id, **{k: v for k, v in body.items() if k != "id"}}
@@ -170,20 +184,42 @@ class FakeDiscord:
         self._call("get_message", channel_id, message_id)
         message = self._message(channel_id, message_id)
         bot_id = str(self.bot_user["id"])
-        reactions = [
-            {
-                "emoji": {"id": None, "name": emoji},
-                "count": len(users),
-                "me": any(u["id"] == bot_id for u in users),
-            }
-            for emoji, users in message["reactions"].items()
-            if users
-        ]
-        return {"id": message_id, "channel_id": channel_id, "reactions": reactions}
+        reactions = []
+        for emoji in dict.fromkeys([*message["reactions"], *message["burst"]]):
+            normal = message["reactions"].get(emoji, [])
+            burst = message["burst"].get(emoji, [])
+            reactions.append(
+                {
+                    "emoji": {"id": None, "name": emoji},
+                    "count": len(normal) + len(burst),  # like Discord: super reactions + the bot's own
+                    "count_details": {"burst": len(burst), "normal": len(normal)},
+                    "me": any(u["id"] == bot_id for u in normal),
+                    "me_burst": any(u["id"] == bot_id for u in burst),
+                }
+            )
+        data: dict[str, Any] = {"id": message_id, "channel_id": channel_id}
+        if reactions:  # Discord omits the key when a message has no reactions
+            data["reactions"] = reactions
+        return data
 
     def get_reaction_users(
-        self, channel_id: str, message_id: str, emoji: str, limit: int = 100
+        self,
+        channel_id: str,
+        message_id: str,
+        emoji: str,
+        limit: int = 100,
+        after: str | None = None,
+        burst: bool = False,
     ) -> list[dict]:
+        """Users ordered by id, like Discord; ``after`` pages, ``burst`` lists super reactions."""
         self._call("get_reaction_users", channel_id, message_id, emoji)
-        message = self._message(channel_id, message_id)
-        return [dict(u) for u in message["reactions"].get(emoji, [])][: max(1, min(limit, 100))]
+        store = self._message(channel_id, message_id)["burst" if burst else "reactions"]
+        users = sorted(store.get(emoji, []), key=lambda u: _id_key(u["id"]))
+        if after is not None:
+            users = [u for u in users if _id_key(u["id"]) > _id_key(after)]
+        return [dict(u) for u in users][: max(1, min(limit, 100))]
+
+
+def _id_key(user_id: str) -> tuple[int, int, str]:
+    """Order ids like Discord does (snowflakes compare as numbers)."""
+    return (0, int(user_id), "") if user_id.isdigit() else (1, 0, user_id)

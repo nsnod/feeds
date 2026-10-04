@@ -261,6 +261,23 @@ def test_roundup_entry_failure_is_isolated_and_budget_stops(fake, channels):
     assert len(flaky.sent) == 3
 
 
+def test_roundup_stops_when_discord_blocks_the_runner(fake, channels):
+    publisher = Publisher(fake, channels, Settings(), sleep=lambda _: None, message_delay_s=0)
+    real_send = fake.send_message
+    sends = []
+
+    def send(channel_id, payload):
+        sends.append(payload)
+        if len(sends) > 2:
+            raise DiscordError("blocked", 429, blocked=True)
+        return real_send(channel_id, payload)
+
+    fake.send_message = send
+    posted = publisher.post_roundup([(gem(t), Features()) for t in ("A", "B", "C", "D")], NOW)
+    assert [p.kind for p in posted] == ["roundup_header", "roundup"]
+    assert len(sends) == 3  # no further attempts after the block
+
+
 def test_roundup_header_failure_propagates(fake, publisher):
     fake.fail("send_message", DiscordError("Missing Access", 403, code=50001))
     with pytest.raises(DiscordError):

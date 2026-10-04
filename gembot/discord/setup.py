@@ -5,16 +5,20 @@
 before, or channels that already have those names), stores their ids in
 ``state.meta.discord`` and posts the welcome message plus a TEST alarm only once.
 
+Discord normalises text channel names (lowercase, spaces -> hyphens), so names are compared
+in that normalised form, and the ids are stored so renamed channels are still found.
+
 :func:`connect_gateway_once` opens one short gateway session with discord.py (no
-privileged intents) and closes it as soon as Discord says READY. Brand-new bots have
-historically needed one gateway connection before REST message sends work; it is
-harmless either way, so the Setup workflow always does it.
+privileged intents) and closes it as soon as Discord says READY. Discord removed the old
+"connect to the gateway once before sending messages" rule from its docs in 2021, so this
+is optional insurance only: it is harmless, and a failure does not stop setup.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -88,8 +92,13 @@ def pick_guild(guilds: list[dict], wanted: str | None) -> str:
     )
 
 
+def normalize_channel_name(name: str | None) -> str:
+    """How Discord stores a text channel name: ``" Gem Alarm "`` -> ``"gem-alarm"``."""
+    return re.sub(r"\s+", "-", (name or "").strip().lstrip("#").strip()).casefold()
+
+
 def _same_name(a: str | None, b: str) -> bool:
-    return (a or "").strip().lstrip("#").casefold() == b.strip().lstrip("#").casefold()
+    return normalize_channel_name(a) == normalize_channel_name(b)
 
 
 def _find(
@@ -211,24 +220,27 @@ async def _connect(token: str, timeout_s: float) -> bool:
     async def on_ready() -> None:
         nonlocal ready
         ready = True
-        log.info("gateway: connected as %s, closing", getattr(client, "user", None))
+        log.info("gateway: connected as %s (optional one-time check), closing", getattr(client, "user", None))
         await client.close()
 
-    try:
-        await asyncio.wait_for(client.start(token, reconnect=False), timeout=timeout_s)
-    except TimeoutError:
-        log.error("gateway: Discord did not say READY within %.0fs", timeout_s)
-    finally:
-        if not client.is_closed():
-            await client.close()
+    async with client:  # closes the client on the way out, whatever happened
+        try:
+            await asyncio.wait_for(client.start(token, reconnect=False), timeout=timeout_s)
+        except TimeoutError:
+            log.warning(
+                "gateway: Discord did not say READY within %.0fs (optional check; posting over "
+                "REST does not need it)",
+                timeout_s,
+            )
     return ready
 
 
 def connect_gateway_once(token: str, timeout_s: float = 30.0) -> bool:
     """Connect to the Discord gateway once (intents: none), wait for READY, disconnect.
 
-    Returns True when Discord said READY, False otherwise (the reason is logged; the token
-    never is).
+    Optional insurance: Discord no longer documents a gateway connection as required before
+    REST message sends. Returns True when Discord said READY, False otherwise (the reason is
+    logged; the token never is). A bad token is the one failure worth acting on.
     """
     if not token:
         log.error("gateway: DISCORD_BOT_TOKEN is not set")
@@ -243,7 +255,11 @@ def connect_gateway_once(token: str, timeout_s: float = 30.0) -> bool:
             "your app -> Bot -> Reset Token) into the DISCORD_BOT_TOKEN secret."
         )
     except discord.PrivilegedIntentsRequired:  # cannot happen with Intents.none(), kept for clarity
-        log.error("gateway: Discord asked for privileged intents; GemBot does not need any.")
+        log.warning("gateway: Discord asked for privileged intents; GemBot does not need any.")
     except Exception as exc:  # network trouble, gateway closed, ...
-        log.error("gateway: could not connect: %s: %s", type(exc).__name__, exc)
+        log.warning(
+            "gateway: optional one-time connect failed (posting over REST does not need it): %s: %s",
+            type(exc).__name__,
+            exc,
+        )
     return False

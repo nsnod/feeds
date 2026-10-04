@@ -40,7 +40,7 @@ WELCOME_COLOR = 0x57F287
 FILLED = "▰"
 EMPTY = "▱"
 ELLIPSIS = "…"
-ZWSP = "​"  # Discord rejects empty field names/values; this renders as nothing
+ZWSP = chr(0x200B)  # zero-width space: Discord rejects empty field names/values, this renders as nothing
 
 DEFAULT_CHANNEL_NAMES = {"alarm": "gem-alarm", "roundup": "gem-roundup", "status": "gembot-status"}
 

@@ -179,6 +179,18 @@ def test_custom_channel_names_from_settings():
     assert fake.channels[result.channels["alarm"]]["name"] == "alarms"
 
 
+def test_channel_names_are_matched_the_way_discord_normalises_them():
+    assert S.normalize_channel_name("  #Gem   Alarm ") == "gem-alarm"
+    config = make_config()
+    config.settings.discord.alarm_channel = "Gem Alarm"  # Discord would store this as "gem-alarm"
+    fake = FakeDiscord()
+    guild = fake.add_guild("Friends")
+    existing = fake.add_channel(guild, "gem-alarm")
+    result = run(fake, State(), config)
+    assert result.channels["alarm"] == existing["id"]
+    assert "#Gem Alarm" not in result.created
+
+
 # ---------------------------------------------------------------- gateway connect
 
 
@@ -217,6 +229,14 @@ class FakeClient:
     def is_closed(self):
         return self.closed
 
+    async def __aenter__(self):  # discord.py: `async with client:` closes it on the way out
+        self.entered = True
+        return self
+
+    async def __aexit__(self, *exc):
+        if not self.closed:
+            await self.close()
+
 
 @pytest.fixture
 def fake_client(monkeypatch):
@@ -229,24 +249,29 @@ def test_gateway_ready_returns_true_and_closes(fake_client, monkeypatch):
     monkeypatch.setattr(fake_client, "behaviour", "ready")
     assert S.connect_gateway_once("tok-SECRET") is True
     client = fake_client.instances[0]
-    assert client.closed and client.token == "tok-SECRET" and client.reconnect is False
+    assert client.closed and client.entered and client.token == "tok-SECRET" and client.reconnect is False
     assert client.intents.value == 0  # no intents at all, privileged or not
 
 
 @pytest.mark.parametrize(
-    ("behaviour", "logged"),
+    ("behaviour", "logged", "level"),
     [
-        ("login_failure", "rejected the bot token"),
-        ("intents", "privileged intents"),
-        ("hang", "did not say READY"),
-        ("boom", "OSError: network is down"),
+        ("login_failure", "rejected the bot token", logging.ERROR),
+        ("intents", "privileged intents", logging.WARNING),
+        ("hang", "did not say READY within 0s (optional check", logging.WARNING),
+        (
+            "boom",
+            "optional one-time connect failed (posting over REST does not need it): OSError",
+            logging.WARNING,
+        ),
     ],
 )
-def test_gateway_failures_return_false(fake_client, monkeypatch, caplog, behaviour, logged):
+def test_gateway_failures_return_false(fake_client, monkeypatch, caplog, behaviour, logged, level):
     monkeypatch.setattr(fake_client, "behaviour", behaviour)
-    with caplog.at_level(logging.ERROR):
+    with caplog.at_level(logging.WARNING):
         assert S.connect_gateway_once("tok-SECRET", timeout_s=0.05) is False
     assert logged in caplog.text
+    assert [r.levelno for r in caplog.records] == [level]
     assert "tok-SECRET" not in caplog.text
     assert fake_client.instances[0].closed
 
