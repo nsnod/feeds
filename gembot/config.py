@@ -5,21 +5,27 @@
 * ``feeds.yaml``     - user-added RSS feeds (Instagram/TikTok via RSS.app, YouTube, ...)
 * ``blocklist.yaml`` - big publishers/studios and banned keywords
 
+A key written twice is an error in settings / sources / blocklist (plain YAML would quietly
+keep the last one). ``feeds.yaml`` is edited by hand on github.com, so it is read leniently:
+every mistake becomes a plain-English line in ``Feeds.problems`` and the feeds that are fine
+still load (the RSS source and ``python -m gembot check-config`` report the problems).
+
 Secrets only ever come from the environment (GitHub Actions secrets).
 """
 
 from __future__ import annotations
 
+import difflib
 import logging
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from gembot.models import FEATURE_NAMES
 
@@ -346,6 +352,9 @@ class FeedConfig(_Cfg):
 
 class Feeds(_Cfg):
     feeds: list[FeedConfig] = Field(default_factory=list)
+    # Mistakes found while reading feeds.yaml ("line 38: ..."). Only load_feeds fills this, a
+    # "problems:" key in the file is itself reported as a problem.
+    problems: list[str] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -456,13 +465,103 @@ def _default_config_dir() -> Path:
     return local if (local / "settings.yaml").exists() else DEFAULT_CONFIG_DIR
 
 
+_MERGE_TAG = "tag:yaml.org,2002:merge"
+
+
+class _Loader(yaml.SafeLoader):
+    """``yaml.SafeLoader`` that notices a key written twice in one mapping and keeps the
+    *first* one. Plain YAML silently keeps the last one, which once turned a stray
+    ``feeds: [2]`` at the end of feeds.yaml into "no feeds at all"."""
+
+    def __init__(self, stream: str) -> None:
+        super().__init__(stream)
+        self.duplicates: list[tuple[str, int, int]] = []  # (key, first line, repeated line), 1-based
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
+        if isinstance(node, yaml.MappingNode):
+            first_lines: dict[Any, int] = {}
+            kept: list[tuple[yaml.Node, yaml.Node]] = []
+            for key_node, value_node in node.value:
+                if key_node.tag != _MERGE_TAG:  # "<<: *defaults" keys may be overridden, that is fine
+                    key = self.construct_object(key_node, deep=True)
+                    line = key_node.start_mark.line + 1
+                    try:
+                        if key in first_lines:
+                            self.duplicates.append((str(key), first_lines[key], line))
+                            continue
+                        first_lines[key] = line
+                    except TypeError:  # an unhashable key: SafeConstructor reports it below
+                        pass
+                kept.append((key_node, value_node))
+            node.value = kept
+        return super().construct_mapping(node, deep=deep)
+
+
+class _YamlMap(dict):
+    """A mapping read by :class:`_LineLoader`: knows its line and each key's line (1-based)."""
+
+    def __init__(self, line: int) -> None:
+        super().__init__()
+        self.line = line
+        self.key_lines: dict[Any, int] = {}
+
+
+class _YamlList(list):
+    """A sequence read by :class:`_LineLoader`: knows its line and each item's line (1-based)."""
+
+    def __init__(self, line: int, item_lines: list[int]) -> None:
+        super().__init__()
+        self.line = line
+        self.item_lines = item_lines
+
+
+class _LineLoader(_Loader):
+    """Builds :class:`_YamlMap` / :class:`_YamlList`, so a problem in feeds.yaml can name its line."""
+
+
+def _construct_map(loader: _LineLoader, node: yaml.MappingNode) -> Iterator[_YamlMap]:
+    data = _YamlMap(node.start_mark.line + 1)
+    yield data
+    data.update(loader.construct_mapping(node))
+    for key_node, _ in node.value:  # duplicates are gone; merged keys come first, own keys win
+        key = loader.construct_object(key_node)  # already built: this is a cache lookup
+        data.key_lines[key] = key_node.start_mark.line + 1
+
+
+def _construct_list(loader: _LineLoader, node: yaml.SequenceNode) -> Iterator[_YamlList]:
+    data = _YamlList(node.start_mark.line + 1, [item.start_mark.line + 1 for item in node.value])
+    yield data
+    data.extend(loader.construct_sequence(node))
+
+
+_LineLoader.add_constructor("tag:yaml.org,2002:map", _construct_map)
+_LineLoader.add_constructor("tag:yaml.org,2002:seq", _construct_list)
+
+
+def _parse_yaml(text: str, loader_class: type[_Loader]) -> tuple[Any, list[tuple[str, int, int]]]:
+    """``(data, duplicate keys sorted by line)``; raises ``yaml.YAMLError``."""
+    loader = loader_class(text)
+    try:
+        return loader.get_single_data(), sorted(loader.duplicates, key=lambda d: d[2])
+    finally:
+        loader.dispose()
+
+
 def _read_yaml(path: Path) -> dict[str, Any]:
+    """Strict reading (settings, sources, blocklist): a silently wrong setting is worse than an error."""
     if not path.exists():
         return {}
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        data, duplicates = _parse_yaml(path.read_text(encoding="utf-8"), _Loader)
     except yaml.YAMLError as exc:
         raise ConfigError(f"{path.name}: invalid YAML: {exc}") from exc
+    if duplicates:
+        listed = "; ".join(
+            f"'{key}' appears twice (lines {first} and {line})" for key, first, line in duplicates
+        )
+        raise ConfigError(
+            f"{path.name}: {listed} - YAML would quietly use only the last one; keep one and delete the other"
+        )
     if data is None:
         return {}
     if not isinstance(data, dict):
@@ -470,12 +569,188 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
+# --------------------------------------------------------------------------------------
+# feeds.yaml (lenient)
+# --------------------------------------------------------------------------------------
+
+FEED_FIELDS = tuple(FeedConfig.model_fields)  # name, url, source, audience, enabled
+_FRIENDLY_ERRORS = {
+    "int_parsing": "must be a whole number like 25000",
+    "int_from_float": "must be a whole number like 25000",
+    "int_type": "must be a whole number like 25000",
+    "string_type": "must be text (put it in quotes)",
+    "bool_parsing": "must be true or false",
+    "bool_type": "must be true or false",
+}
+
+
+def load_feeds(path: Path) -> Feeds:
+    """Read feeds.yaml without ever raising: each feed is checked on its own, a broken one is
+    skipped (or a stray key in it ignored) with a problem that names its line, and the rest load."""
+    if not path.exists():
+        return Feeds()
+    try:
+        data, duplicates = _parse_yaml(path.read_text(encoding="utf-8"), _LineLoader)
+    except yaml.YAMLError as exc:
+        return Feeds(problems=[_yaml_problem(exc)])
+    except Exception as exc:  # not UTF-8, unreadable, nested too deep...: report it, never stop a scan
+        return Feeds(
+            problems=[f"could not read the file ({type(exc).__name__}: {exc}); no feeds were loaded"]
+        )
+    problems: list[tuple[int, str]] = [
+        (line, f"line {line}: '{key}' appears again (first on line {first}); ignored - remove the extra line")
+        for key, first, line in duplicates
+    ]
+    feeds: list[FeedConfig] = []
+    if data is None:
+        pass  # an empty file: no feeds, nothing wrong
+    elif not isinstance(data, dict):
+        line = getattr(data, "line", 0)
+        problems.append(
+            (
+                line,
+                f"{_at(line)}the file must start with a 'feeds:' line followed by the list of feeds "
+                f"(found {_describe(data)}); no feeds were loaded",
+            )
+        )
+    else:
+        key_lines = getattr(data, "key_lines", {})
+        for key in data:
+            if key != "feeds":
+                line = key_lines.get(key, 0)
+                problems.append(
+                    (
+                        line,
+                        f"{_at(line)}unknown top-level key '{key}' ignored - "
+                        f"{_guess(key, ('feeds',))}only 'feeds:' belongs at the left edge, check the "
+                        "spelling and the spaces in front",
+                    )
+                )
+        entries = data.get("feeds")
+        if entries is None:
+            pass  # "feeds:" with nothing under it
+        elif not isinstance(entries, list):
+            line = key_lines.get("feeds", 0)
+            problems.append(
+                (
+                    line,
+                    f"{_at(line)}'feeds' must be a list of feeds, each starting with '- name:' "
+                    f"(found {_describe(entries)}); no feeds were loaded",
+                )
+            )
+        else:
+            item_lines = getattr(entries, "item_lines", [])
+            for position, entry in enumerate(entries, start=1):
+                line = item_lines[position - 1] if position <= len(item_lines) else 0
+                feed = _read_feed(entry, position, line, problems)
+                if feed is not None:
+                    feeds.append(feed)
+    problems.sort(key=lambda item: item[0])
+    return Feeds(feeds=feeds, problems=[text for _, text in problems])
+
+
+def _read_feed(entry: Any, position: int, line: int, problems: list[tuple[int, str]]) -> FeedConfig | None:
+    """One ``- name: ...`` entry -> FeedConfig, or None (skipped). Problems are appended."""
+    if not isinstance(entry, dict):
+        problems.append(
+            (
+                line,
+                f"{_at(line)}feeds entry #{position} is {_describe(entry)}, not a feed; skipped - each feed "
+                "starts with '- name:' and has its url and source on the lines below",
+            )
+        )
+        return None
+    name = entry.get("name")
+    label = (
+        f'feed #{position} "{_short(name)}"'
+        if isinstance(name, str) and name.strip()
+        else f"feed #{position}"
+    )
+    key_lines = getattr(entry, "key_lines", {})
+    known: dict[str, Any] = {}
+    for key, value in entry.items():
+        if key in FEED_FIELDS:
+            known[key] = value
+            continue
+        key_line = key_lines.get(key, line)
+        problems.append((key_line, f"{_at(key_line)}{label}: unknown key '{key}' ignored - {_key_hint(key)}"))
+    try:
+        return FeedConfig.model_validate(known)
+    except ValidationError as exc:
+        errors = exc.errors()
+        first_field = str(errors[0]["loc"][0]) if errors and errors[0]["loc"] else ""
+        error_line = key_lines.get(first_field, line)
+        reasons = "; ".join(_field_reason(error) for error in errors)
+        problems.append((error_line, f"{_at(error_line)}{label} skipped: {reasons}"))
+        return None
+
+
+def _key_hint(key: Any) -> str:
+    if key == "feeds":
+        return (
+            "an extra 'feeds:' line ended up inside a feed; delete it (feeds.yaml needs exactly one "
+            "'feeds:' line, at the very top)"
+        )
+    return (
+        f"{_guess(key, FEED_FIELDS)}check its spelling and indentation (a feed has {', '.join(FEED_FIELDS)})"
+    )
+
+
+def _guess(key: Any, known: tuple[str, ...]) -> str:
+    close = difflib.get_close_matches(str(key), known, n=1, cutoff=0.6)
+    return f"did you mean '{close[0]}'? " if close else ""
+
+
+def _field_reason(error: Mapping[str, Any]) -> str:
+    field = ".".join(str(part) for part in error.get("loc") or ()) or "?"
+    if error["type"] == "missing":
+        return f"'{field}' is missing"
+    if error.get("input") is None:
+        return f"'{field}' is empty"
+    reason = _FRIENDLY_ERRORS.get(error["type"], str(error.get("msg", "is not valid")))
+    return f"'{field}' {reason} (got {_short(repr(error['input']))})"
+
+
+def _yaml_problem(exc: yaml.YAMLError) -> str:
+    mark = getattr(exc, "problem_mark", None)
+    what = ": ".join(filter(None, (getattr(exc, "context", None), getattr(exc, "problem", None)))) or str(exc)
+    where = f"line {mark.line + 1}, column {mark.column + 1}: " if mark is not None else ""
+    return f"{where}not valid YAML ({what}); no feeds were loaded - check the spaces at the start of that line and the one above"
+
+
+def _at(line: int) -> str:
+    return f"line {line}: " if line else ""
+
+
+def _describe(value: Any) -> str:
+    if value is None:
+        return "empty"
+    if isinstance(value, bool):
+        return f"the word {str(value).lower()}"
+    if isinstance(value, int | float):
+        return f"the number {value}"
+    if isinstance(value, str):
+        return f"the text {_short(repr(value))}"
+    if isinstance(value, list):
+        return "a list"
+    if isinstance(value, dict):
+        return "a group of settings"
+    return f"a {type(value).__name__}"
+
+
+def _short(text: str, limit: int = 60) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 def load_config(config_dir: Path | str | None = None, env: Mapping[str, str] | None = None) -> Config:
-    """Load and validate every config file. Missing files fall back to defaults."""
+    """Load and validate every config file. Missing files fall back to defaults.
+
+    Raises :class:`ConfigError` for settings / sources / blocklist; feeds.yaml never raises
+    (its mistakes end up in ``config.feeds.problems``)."""
     env = os.environ if env is None else env
     directory = Path(config_dir or env.get("GEMBOT_CONFIG_DIR") or _default_config_dir())
     parts: dict[str, Any] = {}
-    models = (("settings", Settings), ("sources", Sources), ("feeds", Feeds), ("blocklist", Blocklist))
+    models = (("settings", Settings), ("sources", Sources), ("blocklist", Blocklist))
     for key, model in models:
         path = directory / f"{key}.yaml"
         try:
@@ -484,4 +759,5 @@ def load_config(config_dir: Path | str | None = None, env: Mapping[str, str] | N
             raise
         except Exception as exc:  # pydantic.ValidationError, ...
             raise ConfigError(f"{path.name}: {exc}") from exc
+    parts["feeds"] = load_feeds(directory / "feeds.yaml")
     return Config(**parts, secrets=Secrets.from_env(env), config_dir=directory)

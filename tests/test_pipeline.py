@@ -9,15 +9,26 @@ from __future__ import annotations
 import time
 from datetime import timedelta
 
+import httpx
 import pytest
 
 from gembot.collectors.base import CollectContext, Collector
+from gembot.collectors.rss import RssCollector
+from gembot.config import load_config
 from gembot.discord.fake import FakeDiscord
 from gembot.discord.setup import run_setup
 from gembot.http import HttpError
 from gembot.models import Comment, GamePostState, LLMVerdict, Mention, State
 from gembot.pipeline import Pipeline, _append_snapshot, _merge_mention, decision_counts
-from tests.factories import NOW, make_config, make_http, make_mention
+from tests.factories import (
+    INCIDENT_FEEDS,
+    NOW,
+    config_dir_with_feeds,
+    fixture_path,
+    make_config,
+    make_http,
+    make_mention,
+)
 
 # ----------------------------------------------------------------------------- helpers
 
@@ -303,6 +314,46 @@ def test_source_breaks_after_six_failures_then_recovers_once():
     result = world.run(now + timedelta(minutes=60), ok)
     assert len(result.status_lines) == 1 and "working again" in result.status_lines[0]
     assert world.state.meta.source_health["itch"].consecutive_failures == 0
+
+
+def test_mistakes_in_feeds_yaml_never_stop_a_run_and_reach_the_status_channel(tmp_path):
+    """The 2026-10-04 feeds.yaml: every other source keeps working, the two valid feeds are read,
+    and after six runs #gembot-status quotes the mistake (it never fixes itself)."""
+    config = load_config(config_dir_with_feeds(tmp_path, INCIDENT_FEEDS), env={})
+    world = World(config)
+    instagram = fixture_path("rss", "rssapp_instagram.xml").read_bytes()
+    requested: list[str] = []
+
+    def feeds_online(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        return httpx.Response(200, content=instagram, headers={"Content-Type": "application/rss+xml"})
+
+    def collectors(ctx):
+        rss_ctx = CollectContext(
+            config=ctx.config, http=make_http(httpx.MockTransport(feeds_online)), now=ctx.now, state=ctx.state
+        )
+        return {**hot_collectors(ctx), "rss": RssCollector(rss_ctx)}
+
+    now = NOW
+    for run in range(6):
+        result = world.run(now, collectors)
+        assert result.reports["reddit"].mentions == 1 and result.reports["bluesky"].mentions == 1
+        rss = result.reports["rss"]
+        assert rss.mentions == 3 and rss.ok_units == 2 and not rss.ok
+        assert rss.config_errors == 3  # the stray key, the second "feeds:" and KreekCraft's channel_id
+        if run == 0:
+            assert [d.game_id for d in result.plan.alarms] == ["steam:3141590"]  # the scan went on
+        now += timedelta(minutes=30)
+    # KreekCraft's channel id can never work: it is not requested at all
+    assert sorted(set(requested)) == [
+        "https://rss.app/feeds/5KcRbde1HFqAzPdx.xml",
+        "https://rss.app/feeds/K1vwmXudAkt1exqO.xml",
+    ]
+    assert len(result.status_lines) == 1
+    assert "**rss** has failed 6 runs in a row" in result.status_lines[0]
+    assert "config/feeds.yaml: line 38: 'feeds' appears again (first on line 22)" in result.status_lines[0]
+    status = [p for cid, p in world.sent_since_setup() if cid == world.channel("status")]
+    assert len(status) == 1 and "feeds.yaml" in status[0]["embeds"][0]["description"]
 
 
 def test_skipped_sources_do_not_count_as_failures():

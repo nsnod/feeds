@@ -166,18 +166,44 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def check_config(config_dir: Path | None) -> int:
-    """Validate the config folder (CI runs this on your config/): 0 = usable, 1 = problems."""
+    """Validate the config folder (CI runs this on your config/): 0 = usable, 1 = problems.
+
+    Lists every feed, every mistake found in feeds.yaml and every enabled feed URL that can
+    never work (the RSS source's own URL check). Offline: no feed is requested.
+    """
+    from gembot.collectors.rss import BadFeedUrl, check_feed_url
+
     try:
         config = load_config(config_dir, env={})
     except ConfigError as exc:
         print(f"config problem: {exc}")
         return 1
     feeds = config.feeds.feeds
-    print(f"config OK ({config.config_dir}): {len(feeds)} feed(s)")
+    problems = [f"feeds.yaml: {problem}" for problem in config.feeds.problems]
+    listing: list[str] = []
     for feed in feeds:
         state = "" if feed.enabled else " (paused)"
-        print(f"  - {feed.name} [{feed.source}]{state}: {feed.url}")
-    return 0
+        if feed.enabled:
+            try:
+                _, warning = check_feed_url(feed.url)
+            except BadFeedUrl as exc:
+                problems.append(f"feeds.yaml: feed '{feed.name}': {exc}")
+                state = " (URL problem, see above)"
+            else:
+                state = f" (works, but: {warning})" if warning else ""
+        listing.append(f"  - {feed.name} [{feed.source}]{state}: {feed.url}")
+    for problem in problems:
+        print(f"config problem: {problem}")
+    if problems:
+        print(
+            f"{len(problems)} problem(s) in {config.config_dir}: fix them in feeds.yaml (until then the "
+            f"scan keeps reading the feeds that work). {len(feeds)} feed(s) loaded:"
+        )
+    else:
+        print(f"config OK ({config.config_dir}): {len(feeds)} feed(s)")
+    for line in listing:
+        print(line)
+    return 1 if problems else 0
 
 
 def _env_path(name: str) -> Path | None:

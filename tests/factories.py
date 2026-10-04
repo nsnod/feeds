@@ -36,6 +36,21 @@ def make_config(env: dict[str, str] | None = None, **overrides: Any) -> Config:
     return config.model_copy(update=overrides) if overrides else config
 
 
+# The feeds.yaml a user produced in GitHub's web editor on 2026-10-04 (byte for byte).
+INCIDENT_FEEDS = FIXTURES / "feeds_yaml" / "incident_2026-10-04.yaml"
+
+
+def config_dir_with_feeds(tmp_path: Path, feeds_yaml: Path | str) -> Path:
+    """A copy of the pinned test config whose feeds.yaml is ``feeds_yaml`` (a file, or its text)."""
+    directory = tmp_path / "config"
+    directory.mkdir(exist_ok=True)
+    for source in TEST_CONFIG_DIR.glob("*.yaml"):
+        (directory / source.name).write_bytes(source.read_bytes())
+    text = feeds_yaml.read_text(encoding="utf-8") if isinstance(feeds_yaml, Path) else feeds_yaml
+    (directory / "feeds.yaml").write_text(text, encoding="utf-8")
+    return directory
+
+
 def no_sleep(_: float) -> None:
     return None
 

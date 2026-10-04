@@ -2,8 +2,9 @@
 
 Runs the full pipeline against the live sources on a *temporary copy* of the state (so
 nothing is ever written back), never posts scores to Discord, and prints a summary table
-(requests, mentions, failures, timings, top 10 games). The same markdown is appended to
-``$GITHUB_STEP_SUMMARY`` when it is set, so it shows up on the workflow run page.
+(requests, mentions, failures, timings, one row per feed in feeds.yaml, top 10 games). The
+same markdown is appended to ``$GITHUB_STEP_SUMMARY`` when it is set, so it shows up on the
+workflow run page.
 
 With ``--post-test`` it additionally posts one clearly-labelled TEST alarm to
 ``#gem-alarm`` (channel ids come from the state directory written by the Setup workflow).
@@ -27,6 +28,15 @@ from gembot.state.store import StateStore
 log = logging.getLogger("gembot.smoke")
 
 SUMMARY_LIMIT = 900_000  # $GITHUB_STEP_SUMMARY is capped at 1 MiB per step
+MAX_FEED_ROWS = 100  # rows in the "Your feeds" table
+FEED_STATUS = {
+    "ok": "✅ ok",
+    "warning": "⚠️ warning",
+    "error": "❌ error",
+    "paused": "⏸️ paused",
+    "skipped": "⏭️ skipped",
+    "config": "❌ fix feeds.yaml",
+}
 
 
 def _cell(text: object, limit: int = 140) -> str:
@@ -57,6 +67,13 @@ def render_summary(
     for name, report in result.reports.items():
         if report.skipped:
             status, note = "⏭️ skipped", report.skip_reason or ""
+        elif report.config_errors:
+            failures += 1
+            status = "❌ config problem"
+            if report.feed_results:
+                note = f'{report.config_errors} mistake(s) to fix, see "Your feeds" below'
+            else:
+                note = "; ".join(report.errors[-2:])
         elif report.ok and not report.errors:
             status, note = "✅ ok", "; ".join(report.warnings[:2])
         elif report.ok:
@@ -71,6 +88,9 @@ def render_summary(
         "",
         f"**{result.collected}** mentions collected, **{len(result.results)}** games scored, "
         f"{failures} source(s) failed.",
+    ]
+    lines += _feeds_table(result)
+    lines += [
         "",
         "### Top 10 scored games",
         "",
@@ -110,6 +130,28 @@ def render_summary(
     if len(text.encode()) > SUMMARY_LIMIT:
         text = text.encode()[:SUMMARY_LIMIT].decode(errors="ignore") + "\n\n_(summary truncated)_\n"
     return text
+
+
+def _feeds_table(result: RunResult) -> list[str]:
+    """One row per config/feeds.yaml entry (and per mistake in it), from the RSS source."""
+    rows = [row for report in result.reports.values() for row in report.feed_results]
+    if not rows:
+        return []
+    lines = [
+        "",
+        "### Your feeds",
+        "",
+        "| Feed | Platform | Status | Items | Note |",
+        "|---|---|---|---:|---|",
+    ]
+    for row in rows[:MAX_FEED_ROWS]:
+        items = str(row.items) if row.status in ("ok", "warning") else ""
+        status = FEED_STATUS.get(row.status, _cell(row.status, 20))
+        note = _cell(row.note, 300) if row.note else ""
+        lines.append(f"| {_cell(row.feed, 60)} | {_cell(row.platform, 20)} | {status} | {items} | {note} |")
+    if len(rows) > MAX_FEED_ROWS:
+        lines += ["", f"_…and {len(rows) - MAX_FEED_ROWS} more row(s), see the run log._"]
+    return lines
 
 
 def _load_state_copy(state_dir: Path | None) -> State:

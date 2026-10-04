@@ -1,0 +1,38 @@
+# Your own RSS feeds: Instagram / TikTok accounts (via RSS.app), YouTube channels,
+# blogs, newsletters... See README.md -> "Add Instagram, TikTok and YouTube feeds".
+#
+# Each entry:
+#   name:     anything you like (shown in logs)
+#   url:      the feed URL
+#   source:   instagram | tiktok | youtube | rss   (which platform it counts as)
+#   audience: optional follower count, used for the "small creator, big reaction" math
+#   enabled:  optional, set to false to pause a feed without deleting it
+#
+# Examples (remove the leading "# " to use them):
+#
+# feeds:
+#   - name: "Some indie curator (Instagram)"
+#     url: "https://rss.app/feeds/XXXXXXXXXXXXXXXX.xml"
+#     source: instagram
+#     audience: 25000
+#   - name: "Devlog channel (YouTube)"
+#     url: "https://www.youtube.com/feeds/videos.xml?channel_id=UCxxxxxxxxxxxxxxxxxxxxxx"
+#     source: youtube
+
+feeds:
+  - name: "GameGil (@officialgamegil)"
+    url: "https://rss.app/feeds/K1vwmXudAkt1exqO.xml"
+    source: instagram        # or: tiktok
+    audience: 8357     # their follower count, typed by you
+
+    feeds:
+  - name: "Hellmei (@Hellmeitv)"
+    url: "https://rss.app/feeds/5KcRbde1HFqAzPdx.xml"
+    source: instagram        # or: tiktok
+    audience: 6580        # their follower count, typed by you
+
+  - name: "KreekCraft (YouTube)"
+    url: "https://www.youtube.com/feeds/videos.xml?channel_id=UCUCxsk7hqE_CwZWGEJEkGanbA"
+    source: youtube
+
+feeds: [2]

@@ -223,6 +223,21 @@ accounts.
 3. Add it to `config/feeds.yaml` with `source: youtube`. YouTube feeds include view and like
    counts; `audience` (subscriber count) is optional.
 
+### Check your feeds
+
+After you commit `config/feeds.yaml`, open the **Actions** tab: the CI run's **"Check your
+config/ folder"** step lists every feed and turns red with the exact line to fix if something
+is off. The **Smoke test** summary has a **"Your feeds"** table with each feed's status and
+item count. A mistake never stops the scans: the feeds that are fine keep working, and
+`#gembot-status` reminds you after a few runs. The three common mistakes:
+
+- **An extra or indented `feeds:` line** inside a feed (e.g. under `audience:`). Delete it:
+  the file has exactly one `feeds:` line, at the very top.
+- **A second `feeds:` block** further down (e.g. `feeds: [2]` at the end). Delete it and put
+  every feed under the first `feeds:` line.
+- **`UC` pasted twice** in a YouTube channel ID (`channel_id=UCUCxsk…`). The ID is 24
+  characters and starts with a single `UC`.
+
 ---
 
 ## Tune it

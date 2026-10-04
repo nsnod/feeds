@@ -12,12 +12,20 @@ import httpx
 import pytest
 
 from gembot import __main__ as cli
+from gembot.config import load_config
 from gembot.discord.fake import FakeDiscord
 from gembot.replay import ReplayTransport, Route, load_routes
 from gembot.runner import make_discord, run_scan, run_setup_command
 from gembot.smoke import render_summary, run_smoke
 from gembot.state.store import StateStore
-from tests.factories import NOW, TEST_CONFIG_DIR, make_config, make_http
+from tests.factories import (
+    INCIDENT_FEEDS,
+    NOW,
+    TEST_CONFIG_DIR,
+    config_dir_with_feeds,
+    make_config,
+    make_http,
+)
 
 GIT_ENV = {
     "GIT_CONFIG_GLOBAL": "/dev/null",
@@ -231,6 +239,84 @@ def test_render_summary_names_games_and_shows_the_thresholds():
     assert "needs **45**+, an alarm **72**+" in text
 
 
+def test_render_summary_lists_every_feed_below_the_sources():
+    from gembot.collectors.base import FeedResult, SourceReport
+    from gembot.pipeline import RunResult
+
+    result = RunResult(now=NOW)
+    result.reports["steam"] = SourceReport("steam", requests=3, mentions=40, ok_units=3)
+    result.reports["rss"] = SourceReport(
+        "rss",
+        requests=2,
+        mentions=5,
+        ok_units=2,
+        errors=["config/feeds.yaml: line 38: 'feeds' appears again (first on line 22)"],
+        config_errors=1,
+        feed_results=[
+            FeedResult(
+                "config/feeds.yaml", "", "config", note="line 38: 'feeds' appears again (first on line 22)"
+            ),
+            FeedResult("GameGil | IG", "instagram", "ok", items=5),
+            FeedResult("Blog", "rss", "warning", items=0, note="malformed feed, kept what could be read"),
+            FeedResult("KreekCraft", "youtube", "error", note="HTTP 404"),
+            FeedResult("Old", "rss", "paused", note="enabled: false in feeds.yaml"),
+            FeedResult("Second IG", "instagram", "skipped", note="not requested: rss.app answered HTTP 429"),
+        ],
+    )
+    text = render_summary(result, seconds=1.0)
+    assert '| rss | ❌ config problem | 2 | 5 | 1 mistake(s) to fix, see "Your feeds" below |' in text
+    assert "1 source(s) failed." in text
+    table = text.split("### Your feeds\n\n", 1)[1].split("\n\n", 1)[0].splitlines()
+    assert table == [
+        "| Feed | Platform | Status | Items | Note |",
+        "|---|---|---|---:|---|",
+        "| config/feeds.yaml |  | ❌ fix feeds.yaml |  | line 38: 'feeds' appears again (first on line 22) |",
+        "| GameGil \\| IG | instagram | ✅ ok | 5 |  |",
+        "| Blog | rss | ⚠️ warning | 0 | malformed feed, kept what could be read |",
+        "| KreekCraft | youtube | ❌ error |  | HTTP 404 |",
+        "| Old | rss | ⏸️ paused |  | enabled: false in feeds.yaml |",
+        "| Second IG | instagram | ⏭️ skipped |  | not requested: rss.app answered HTTP 429 |",
+    ]
+    assert text.index("| Source |") < text.index("### Your feeds") < text.index("### Top 10 scored games")
+    # no feeds, no table; a config mistake without feed rows quotes the last errors
+    other = RunResult(now=NOW)
+    other.reports["x"] = SourceReport("x", errors=["first", "second", "last"], config_errors=1)
+    text = render_summary(other, seconds=1.0)
+    assert "| x | ❌ config problem | 0 | 0 | second; last |" in text and "### Your feeds" not in text
+
+
+def test_the_feeds_table_is_capped():
+    from gembot.collectors.base import FeedResult, SourceReport
+    from gembot.pipeline import RunResult
+    from gembot.smoke import MAX_FEED_ROWS
+
+    result = RunResult(now=NOW)
+    rows = [FeedResult(f"feed {i}", "rss", "error", note="x" * 5000) for i in range(MAX_FEED_ROWS + 50)]
+    result.reports["rss"] = SourceReport("rss", errors=["x"], feed_results=rows)
+    text = render_summary(result, seconds=1.0)
+    assert text.count("| ❌ error |") == MAX_FEED_ROWS and "…and 50 more row(s)" in text
+    assert len(text.encode()) < 100_000  # notes are clipped per cell
+
+
+def test_smoke_with_the_incident_feeds_file_still_reads_every_other_source(tmp_path):
+    config = load_config(config_dir_with_feeds(tmp_path, INCIDENT_FEEDS), env={})
+    summary = tmp_path / "summary.md"
+    run_smoke(config, now=NOW, summary_path=summary, transport=offline(), sleep=lambda s: None)
+    text = summary.read_text()
+    sources = text.split("### Your feeds", 1)[0]
+    for name in ("steam", "reddit", "itch", "bluesky"):
+        assert f"| {name} | " in sources  # every source still ran (and failed politely, offline)
+    assert '| rss | ❌ config problem | 2 | 0 | 3 mistake(s) to fix, see "Your feeds" below |' in sources
+    assert "| KreekCraft (YouTube) | youtube | ❌ fix feeds.yaml |  | channel_id is 26 characters;" in text
+    assert (
+        "| config/feeds.yaml |  | ❌ fix feeds.yaml |  | line 38: 'feeds' appears again (first on line 22)"
+        in text
+    )
+    assert (
+        "| GameGil (@officialgamegil) | instagram | ❌ error |  | rss: HTTP 404 for https://rss.app/" in text
+    )
+
+
 def test_render_summary_truncates_huge_output():
     from gembot.collectors.base import SourceReport
     from gembot.pipeline import RunResult
@@ -386,7 +472,74 @@ def test_check_config_reports_problems_and_lists_feeds(tmp_path, capsys):
     assert "config OK" in out and "2 feed(s)" in out and "B [rss] (paused)" in out
     (tmp_path / "feeds.yaml").write_text("feeds:\n  - name: A\n    url: https://x/feed\nfeeds: [2]\n")
     assert cli.main(["--config-dir", str(tmp_path), "check-config"]) == 1
-    assert "config problem: feeds.yaml" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "config problem: feeds.yaml: line 4: 'feeds' appears again (first on line 1)" in out
+    assert "1 problem(s) in" in out and "1 feed(s) loaded:\n  - A [rss]: https://x/feed" in out
+    assert "config OK" not in out
+    (tmp_path / "settings.yaml").write_text("run: {}\nrun: {}\n")
+    assert cli.main(["--config-dir", str(tmp_path), "check-config"]) == 1
+    assert "config problem: settings.yaml: 'run' appears twice (lines 1 and 2)" in capsys.readouterr().out
+
+
+def test_check_config_on_the_incident_file_lists_every_mistake_and_fails(tmp_path, capsys):
+    directory = config_dir_with_feeds(tmp_path, INCIDENT_FEEDS)
+    assert cli.main(["--config-dir", str(directory), "check-config"]) == 1
+    out = capsys.readouterr().out
+    problems = [line for line in out.splitlines() if line.startswith("config problem: ")]
+    assert len(problems) == 3
+    assert problems[0].startswith('config problem: feeds.yaml: line 28: feed #1 "GameGil (@officialgamegil)"')
+    assert "unknown key 'feeds' ignored" in problems[0]
+    assert problems[1] == (
+        "config problem: feeds.yaml: line 38: 'feeds' appears again (first on line 22); ignored - remove the extra line"
+    )
+    assert problems[2].startswith(
+        "config problem: feeds.yaml: feed 'KreekCraft (YouTube)': channel_id is 26 characters; YouTube "
+        "channel ids are 24 and start with UC (was 'UC' pasted twice?)"
+    )
+    assert "3 feed(s) loaded:" in out and "config OK" not in out
+    assert "  - KreekCraft (YouTube) [youtube] (URL problem, see above): " in out
+    assert "  - Hellmei (@Hellmeitv) [instagram]: https://rss.app/feeds/5KcRbde1HFqAzPdx.xml" in out
+
+
+def test_check_config_lints_enabled_feeds_offline(tmp_path, capsys, monkeypatch):
+    def no_network(*args, **kwargs):
+        raise AssertionError("check-config must not make requests")
+
+    monkeypatch.setattr(httpx.Client, "send", no_network)
+    directory = config_dir_with_feeds(
+        tmp_path,
+        "feeds:\n"
+        "  - {name: Page, url: 'https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv', source: youtube}\n"
+        "  - {name: Viewer, url: 'https://rss.app/feed/AbCdEf', source: instagram, enabled: false}\n",
+    )
+    assert cli.main(["--config-dir", str(directory), "check-config"]) == 0  # a paused feed is not linted
+    out = capsys.readouterr().out
+    assert "config OK" in out and "2 feed(s)" in out
+    assert (
+        "  - Page [youtube] (works, but: https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv is a channel page"
+        in out
+    )
+    assert "  - Viewer [instagram] (paused): https://rss.app/feed/AbCdEf" in out
+    (directory / "feeds.yaml").write_text("feeds:\n  - {name: Viewer, url: 'https://rss.app/feed/AbCdEf'}\n")
+    assert cli.main(["--config-dir", str(directory), "check-config"]) == 1
+    assert "config problem: feeds.yaml: feed 'Viewer': use the https://rss.app/feeds/AbCdEf.xml RSS URL" in (
+        capsys.readouterr().out
+    )
+
+
+def test_a_scan_with_the_incident_file_runs_instead_of_stopping(tmp_path, monkeypatch):
+    seen: dict = {}
+
+    def fake_run_scan(config, **kw):
+        from gembot.pipeline import RunResult
+
+        seen["feeds"] = [feed.name for feed in config.feeds.feeds]
+        return RunResult(now=kw["now"])
+
+    monkeypatch.setattr("gembot.runner.run_scan", fake_run_scan)
+    directory = config_dir_with_feeds(tmp_path, INCIDENT_FEEDS)
+    assert cli.main(["--config-dir", str(directory), "run", "--dry-run"]) == 0  # used to exit 2
+    assert seen["feeds"] == ["GameGil (@officialgamegil)", "Hellmei (@Hellmeitv)", "KreekCraft (YouTube)"]
 
 
 def test_replay_does_not_need_a_valid_user_config(tmp_path, monkeypatch):
