@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Callable
 from datetime import datetime, timedelta
 
@@ -16,11 +17,19 @@ import respx
 
 from gembot.collectors.base import CollectContext
 from gembot.collectors.bluesky import (
+    APP_PASSWORDS,
+    HANDLE_FOUND,
+    HANDLE_MISSING,
+    HANDLE_SKIPPED,
+    HANDLE_UNKNOWN,
     LOGIN_LIMIT_WARNING,
     PUBLIC_BLOCKED_REASON,
     BlueskyCollector,
     BlueskySession,
     SessionBox,
+    _clean_handle,
+    _normalize_handle,
+    _rejected_message,
     parse_at_uri,
     parse_post,
     post_url,
@@ -42,6 +51,7 @@ PUBLIC_SEARCH = f"{PUBLIC}/xrpc/app.bsky.feed.searchPosts"
 THREAD = f"{PUBLIC}/xrpc/app.bsky.feed.getPostThread"
 PROFILE = f"{PUBLIC}/xrpc/app.bsky.actor.getProfile"
 PROFILES = f"{PUBLIC}/xrpc/app.bsky.actor.getProfiles"
+RESOLVE = f"{PUBLIC}/xrpc/com.atproto.identity.resolveHandle"
 PROXY = "did:web:api.bsky.app#bsky_appview"
 
 HANDLE = "gembot-test.bsky.social"
@@ -137,6 +147,22 @@ def no_token(route: respx.Route) -> bool:
     return all("authorization" not in call.request.headers for call in route.calls)
 
 
+def resolved() -> httpx.Response:  # resolveHandle: the handle exists
+    return httpx.Response(200, json={"did": ME})
+
+
+def unresolved() -> httpx.Response:  # resolveHandle: no such handle
+    return err(400, {"error": "InvalidRequest", "message": "Unable to resolve handle"})
+
+
+def assert_no_secrets(state: State, report, caplog, *secrets: str) -> None:
+    """Neither the errors, the warnings, the logs nor the (public) state mention a secret."""
+    texts = [*report.errors, *report.warnings, caplog.text, json.dumps(state.meta.model_dump(mode="json"))]
+    for secret in (PASSWORD, "gembot-test", *secrets):
+        for text in texts:
+            assert secret.lower() not in text.lower()
+
+
 @pytest.fixture
 def mock():
     with respx.mock(assert_all_called=False) as router:
@@ -196,7 +222,7 @@ def test_first_run_logs_in_searches_via_pds_and_stores_session_encrypted(mock, c
     assert sc["created"] == ["2026-10-03T12:00:00Z"]
     assert "route" not in sc and "login_error" not in sc
     public_state = json.dumps(state.meta.model_dump(mode="json"))
-    for secret in (ACCESS1, REFRESH1, PASSWORD, "FAKE-ACCESS", "FAKE-REFRESH"):
+    for secret in (ACCESS1, REFRESH1, PASSWORD, HANDLE, "FAKE-ACCESS", "FAKE-REFRESH"):
         assert secret not in public_state
         assert secret not in caplog.text
     session = stored(state)
@@ -361,25 +387,26 @@ def test_login_cap_after_a_failed_login_keeps_reporting_the_failure(mock):
 def test_rejected_app_password_is_explained_and_not_retried_with_the_same_secret(mock):
     state = State()
     create = mock.post(CREATE).mock(return_value=err(401, "error_auth.json"))
+    resolve = mock.get(RESOLVE).mock(return_value=httpx.Response(500))  # no verdict: general advice
     search = mock.get(PDS_SEARCH).mock(return_value=ok())
 
     mentions, report = make_collector(state=state).run()
 
     assert mentions == [] and not report.ok and not search.called
     assert "BLUESKY_APP_PASSWORD rejected — create a new App Password" in report.errors[0]
-    assert create.call_count == 1
+    assert create.call_count == 1 and resolve.call_count == 1
     sc = scratch(state)
     assert sc["login_error"]["fatal"] is True and sc["created"] == [iso(NOW)]
     assert PASSWORD not in json.dumps(sc)
 
     # same secret, next run: no request, still reported as broken
     _, again = make_collector(state=state, now=NOW + timedelta(minutes=30)).run()
-    assert create.call_count == 1
+    assert create.call_count == 1 and resolve.call_count == 1
     assert "rejected" in again.errors[0] and "when the secret changes" in again.errors[0]
 
-    # after a day the same secret gets one more try
+    # after a day the same secret gets one more try (the handle was already checked)
     make_collector(state=state, now=NOW + timedelta(hours=25)).run()
-    assert create.call_count == 2
+    assert create.call_count == 2 and resolve.call_count == 1
 
     # a new secret is tried right away, and success clears the error
     create.mock(return_value=ok("create_session.json"))
@@ -409,9 +436,10 @@ def test_login_errors_are_explained(mock, response, expected):
     state = State()
     mock.post(CREATE).mock(return_value=response)
     search = mock.get(PDS_SEARCH).mock(return_value=ok())
+    public = mock.route(host="public.api.bsky.app").mock(return_value=resolved())
     _, report = make_collector(state=state).run()
     assert expected in report.errors[0]
-    assert not search.called and not report.ok
+    assert not search.called and not report.ok and not public.called
     assert scratch(state)["login_error"]["fatal"] is True
     assert "session" not in scratch(state)
 
@@ -446,6 +474,260 @@ def test_login_without_diddoc_uses_the_login_server_as_pds(mock):
     assert report.ok and search.call_count == 2
     assert search.calls[0].request.headers["atproto-proxy"] == PROXY
     assert stored(state).pds == ENTRY
+
+
+# ---------------------------------------------------------------- handle cleanup + 401 diagnosis
+
+LINK = "took the handle from a profile link"
+LEGACY_REJECTION = (  # what a 401 stored before handle checks existed (still in live state)
+    "BLUESKY_APP_PASSWORD rejected — create a new App Password (Bluesky Settings -> Privacy and "
+    "security -> App passwords), update the secret, and check BLUESKY_HANDLE"
+)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected", "fixes"),
+    [
+        (HANDLE, HANDLE, []),
+        ("gembot.games", "gembot.games", []),  # a custom-domain handle
+        ("@gembot-test.bsky.social", HANDLE, ["removed a leading @"]),
+        ("  gembot-test.bsky.social\n", HANDLE, ["removed spaces"]),
+        ("GemBot-Test.bsky.social", HANDLE, ["made it lowercase"]),
+        ("gamegil", "gamegil.bsky.social", ["added .bsky.social"]),
+        (
+            "@GameGil",
+            "gamegil.bsky.social",
+            ["removed a leading @", "made it lowercase", "added .bsky.social"],
+        ),
+        ("gamegil.bsky.social/", "gamegil.bsky.social", ["removed a trailing /"]),
+        ("https://bsky.app/profile/gamegil.bsky.social", "gamegil.bsky.social", [LINK]),
+        ("bsky.app/profile/gamegil.bsky.social/", "gamegil.bsky.social", [LINK]),
+        (
+            "http://www.bsky.app/profile/GameGil.com/post/3m2ykq7xfjc2s",
+            "gamegil.com",
+            [LINK, "made it lowercase"],
+        ),
+        ("HTTPS://BSKY.APP/profile/gamegil?ref=share", "gamegil.bsky.social", [LINK, "added .bsky.social"]),
+        (
+            "https://bsky.app/profile/@gamegil",
+            "gamegil.bsky.social",
+            [LINK, "removed a leading @", "added .bsky.social"],
+        ),
+        (f"https://bsky.app/profile/{ME}", ME, [LINK]),
+        ("Me@Example.com", "Me@Example.com", []),  # an email: only trimmed
+        (" me@example.com ", "me@example.com", ["removed spaces"]),
+        (ME, ME, []),
+        ("did:web:gembot.example.com", "did:web:gembot.example.com", []),
+        ("@", "", ["removed a leading @"]),
+    ],
+)
+def test_handle_cleanup(raw, expected, fixes):
+    assert _clean_handle(raw) == (expected, fixes)
+    assert _normalize_handle(raw) == expected
+    assert _clean_handle(expected) == (expected, [])  # a clean handle needs no fixing
+    assert SessionBox(raw, PASSWORD).fingerprint == SessionBox(expected, PASSWORD).fingerprint
+
+
+def test_cleaned_handle_is_sent_and_the_fix_is_logged_once_without_the_handle(mock, caplog):
+    caplog.set_level(logging.DEBUG, logger="gembot")  # httpx (URLs) is at WARNING, as in a real run
+    state = State()
+    create = mock.post(CREATE).mock(return_value=err(401, "error_auth.json"))
+    resolve = mock.get(RESOLVE).mock(return_value=unresolved())
+
+    _, report = make_collector(env={**ENV, "BLUESKY_HANDLE": "@GameGil"}, state=state).run()
+
+    assert json.loads(create.calls.last.request.content)["identifier"] == "gamegil.bsky.social"
+    assert resolve.calls.last.request.url.params["handle"] == "gamegil.bsky.social"
+    fixed = [r.getMessage() for r in caplog.records if "BLUESKY_HANDLE fixed" in r.getMessage()]
+    assert fixed == [
+        "BLUESKY_HANDLE fixed for this run: removed a leading @, made it lowercase, added .bsky.social"
+    ]
+    assert "BLUESKY_HANDLE is not a Bluesky account" in report.errors[0]
+    assert_no_secrets(state, report, caplog, "gamegil")
+
+
+@pytest.mark.parametrize(
+    ("answer", "check", "expected"),
+    [
+        (
+            resolved(),
+            HANDLE_FOUND,
+            "BLUESKY_HANDLE exists on Bluesky, so BLUESKY_APP_PASSWORD is wrong: make a new App Password "
+            f"for that account ({APP_PASSWORDS}) and update the secret",
+        ),
+        (
+            unresolved(),
+            HANDLE_MISSING,
+            "BLUESKY_HANDLE is not a Bluesky account: use the full handle, like yourname.bsky.social "
+            "(no @, no link, not the display name)",
+        ),
+        (
+            err(400, {"message": "Unable to resolve handle"}),
+            HANDLE_MISSING,
+            "BLUESKY_HANDLE is not a Bluesky",
+        ),
+        (httpx.Response(500), HANDLE_UNKNOWN, LEGACY_REJECTION),
+        (httpx.ConnectError("connection refused"), HANDLE_UNKNOWN, LEGACY_REJECTION),
+        (httpx.Response(429, json={"error": "RateLimitExceeded"}), HANDLE_UNKNOWN, LEGACY_REJECTION),
+        (httpx.Response(200, json={"handle": "x.bsky.social"}), HANDLE_UNKNOWN, LEGACY_REJECTION),
+        (cdn_403(), HANDLE_UNKNOWN, LEGACY_REJECTION),
+    ],
+)
+def test_rejected_login_checks_the_handle_once_without_a_token(mock, caplog, answer, check, expected):
+    caplog.set_level(logging.DEBUG, logger="gembot")
+    state = State()
+    create = mock.post(CREATE).mock(return_value=err(401, "error_auth.json"))
+    resolve = mock.get(RESOLVE)
+    if isinstance(answer, Exception):
+        resolve.mock(side_effect=answer)
+    else:
+        resolve.mock(return_value=answer)
+    search = mock.get(PDS_SEARCH).mock(return_value=ok())
+
+    mentions, report = make_collector(state=state).run()
+
+    assert mentions == [] and not report.ok and not search.called
+    assert create.call_count == 1 and resolve.call_count == 1  # one request, never retried
+    assert no_token(resolve) and resolve.calls.last.request.url.params["handle"] == HANDLE
+    error = report.errors[0]
+    assert error.startswith(f"login: {expected}") and len(report.errors) == 1
+    assert error.endswith(". GemBot tries again on its next run after the secret changes")
+    assert "doesn't look like" not in error  # PASSWORD has the App Password shape
+    entry = scratch(state)["login_error"]
+    assert entry["handle_check"] == check and entry["rejected"] is True and entry["fatal"] is True
+    assert scratch(state)["created"] == [iso(NOW)]  # the check is not a login attempt
+    assert report.requests == 2  # but it is charged to the Bluesky budget
+
+    # same secrets, next run: no login, no second check, same advice
+    _, again = make_collector(state=state, now=NOW + timedelta(minutes=30)).run()
+    assert create.call_count == 1 and resolve.call_count == 1 and again.requests == 0
+    next_try = iso(NOW + timedelta(hours=24))
+    assert again.errors == [f"login: {entry['message']} (next try {next_try} or when the secret changes)"]
+    assert_no_secrets(state, report, caplog)
+    assert_no_secrets(state, again, caplog)
+
+
+@pytest.mark.parametrize("handle", ["Me@Example.com", ME, "did:web:gembot.example.com"])
+def test_email_and_did_identifiers_are_sent_as_is_and_not_looked_up(mock, caplog, handle):
+    caplog.set_level(logging.DEBUG, logger="gembot")
+    state = State()
+    create = mock.post(CREATE).mock(return_value=err(401, "error_auth.json"))
+    public = mock.route(host="public.api.bsky.app").mock(return_value=resolved())
+
+    _, report = make_collector(env={**ENV, "BLUESKY_HANDLE": handle}, state=state).run()
+
+    assert json.loads(create.calls.last.request.content)["identifier"] == handle
+    assert not public.called and report.requests == 1
+    assert report.errors[0].startswith(f"login: {LEGACY_REJECTION}")
+    assert scratch(state)["login_error"]["handle_check"] == HANDLE_SKIPPED
+    assert "BLUESKY_HANDLE fixed" not in caplog.text
+    assert_no_secrets(state, report, caplog, handle)
+
+
+def test_skipped_login_checks_the_handle_once_and_keeps_the_answer(mock, caplog):
+    """The live state of 2026-10-04: a 401 stored before handle checks existed, same secrets."""
+    caplog.set_level(logging.DEBUG, logger="gembot")
+    state = State()
+    sc = scratch(state)
+    rejected_at = NOW - timedelta(hours=2)
+    sc["created"] = [iso(rejected_at)]
+    sc["login_error"] = {
+        "at": iso(rejected_at),
+        "message": LEGACY_REJECTION,
+        "fp": SessionBox(HANDLE, PASSWORD).fingerprint,
+        "fatal": True,
+    }
+    create = mock.post(CREATE).mock(return_value=ok("create_session.json"))
+    resolve = mock.get(RESOLVE).mock(return_value=resolved())
+
+    # no request budget left: no lookup, and nothing stored that would stop a later one
+    _, broke = make_collector(state=state, budget=0).run()
+    assert not resolve.called and "handle_check" not in sc["login_error"]
+    assert broke.errors[0].startswith(f"login: {LEGACY_REJECTION}")
+
+    _, report = make_collector(state=state).run()
+
+    assert not create.called and resolve.call_count == 1 and no_token(resolve)
+    next_try = iso(rejected_at + timedelta(hours=24))
+    found = _rejected_message(HANDLE_FOUND, looks_right=True)
+    assert report.errors == [f"login: {found} (next try {next_try} or when the secret changes)"]
+    entry = sc["login_error"]
+    assert entry["handle_check"] == HANDLE_FOUND and entry["rejected"] is True
+    assert entry["at"] == iso(rejected_at) and entry["fp"] == SessionBox(HANDLE, PASSWORD).fingerprint
+    assert sc["created"] == [iso(rejected_at)] and report.requests == 1
+
+    # kept: later runs inside the window make no request at all
+    _, later = make_collector(state=state, now=NOW + timedelta(hours=3)).run()
+    assert later.errors == report.errors and later.requests == 0
+    assert resolve.call_count == 1 and not create.called
+    assert_no_secrets(state, later, caplog)
+
+
+@pytest.mark.parametrize("password", ["hunter2", "ABCD-EFGH-IJKL-MNOP", "abcd-efgh-ijkl"])
+@pytest.mark.parametrize(
+    ("answer", "check"),
+    [(resolved, HANDLE_FOUND), (unresolved, HANDLE_MISSING), (lambda: httpx.Response(503), HANDLE_UNKNOWN)],
+)
+def test_password_that_does_not_look_like_an_app_password_gets_a_hint(mock, caplog, password, answer, check):
+    caplog.set_level(logging.DEBUG, logger="gembot")
+    state = State()
+    mock.post(CREATE).mock(return_value=err(401, "error_auth.json"))
+    mock.get(RESOLVE).mock(return_value=answer())
+
+    _, report = make_collector(env={**ENV, "BLUESKY_APP_PASSWORD": password}, state=state).run()
+
+    error = report.errors[0]
+    assert scratch(state)["login_error"]["handle_check"] == check
+    assert "doesn't look like an App Password" in error and "xxxx-xxxx-xxxx-xxxx" in error
+    assert APP_PASSWORDS in error  # how to make one
+    assert not re.search(r"\d", error)  # no part of the password, not even its length
+    assert_no_secrets(state, report, caplog, password)
+
+
+def test_rejected_messages_stay_short():
+    retry_notes = (
+        ". GemBot tries again on its next run after the secret changes",
+        " (next try 2026-10-04T12:00:00Z or when the secret changes)",
+    )
+    for check in (HANDLE_FOUND, HANDLE_MISSING, HANDLE_UNKNOWN, HANDLE_SKIPPED):
+        for looks_right in (True, False):
+            message = _rejected_message(check, looks_right=looks_right)
+            assert ("doesn't look like an App Password" in message) is not looks_right
+            assert "BLUESKY_HANDLE" in message  # names the secrets, never their values
+            for note in retry_notes:
+                assert len(f"login: {message}{note}") <= 330
+
+
+def test_changed_handle_cleanup_allows_exactly_one_new_login(mock, monkeypatch):
+    """The fingerprint comes from the cleaned-up handle, so cleaning a handle up differently
+    counts as new credentials: one fresh login, then the usual 24-hour guard."""
+    import gembot.collectors.bluesky as bluesky
+
+    env = {**ENV, "BLUESKY_HANDLE": "gembot-test"}  # no domain: now sent as gembot-test.bsky.social
+    with monkeypatch.context() as patch:  # how handles were cleaned up before
+        patch.setattr(bluesky, "_normalize_handle", lambda handle: handle.strip().lstrip("@"))
+        old_fp = SessionBox("gembot-test", PASSWORD).fingerprint
+    new_fp = SessionBox("gembot-test", PASSWORD).fingerprint
+    assert old_fp != new_fp == SessionBox(HANDLE, PASSWORD).fingerprint
+    state = State()
+    sc = scratch(state)
+    earlier = iso(NOW - timedelta(hours=1))
+    sc["created"] = [earlier]
+    sc["login_error"] = {"at": earlier, "message": LEGACY_REJECTION, "fp": old_fp, "fatal": True}
+    create = mock.post(CREATE).mock(return_value=err(401, "error_auth.json"))
+    resolve = mock.get(RESOLVE).mock(return_value=resolved())
+
+    _, report = make_collector(env=env, state=state).run()
+
+    assert create.call_count == 1 and resolve.call_count == 1
+    assert json.loads(create.calls.last.request.content)["identifier"] == HANDLE
+    assert sc["created"] == [earlier, iso(NOW)] and sc["login_error"]["fp"] == new_fp
+    assert "BLUESKY_HANDLE exists on Bluesky" in report.errors[0]
+
+    for minutes in (30, 90):  # the new fingerprint is guarded like any other
+        _, again = make_collector(env=env, state=state, now=NOW + timedelta(minutes=minutes)).run()
+        assert "when the secret changes" in again.errors[0]
+    assert create.call_count == 1 and resolve.call_count == 1
 
 
 # ---------------------------------------------------------------- search routes
@@ -537,12 +819,13 @@ def test_failed_renewal_during_search_stops_the_run(mock):
     search = mock.get(PDS_SEARCH).mock(return_value=err(401, {"error": "ExpiredToken"}))
     mock.post(REFRESH).mock(return_value=err(400, "error_expired.json"))
     create = mock.post(CREATE).mock(return_value=err(401, "error_auth.json"))
+    mock.get(RESOLVE).mock(return_value=resolved())
 
     _, report = make_collector(state=state).run()
 
     assert search.call_count == 1 and create.call_count == 1
     assert len(report.errors) == 1
-    assert "could not be renewed" in report.errors[0] and "App Password" in report.errors[0]
+    assert "could not be renewed" in report.errors[0] and "BLUESKY_APP_PASSWORD is wrong" in report.errors[0]
 
 
 def test_cdn_refusal_mid_run_stops_and_keeps_partial_results(mock):
