@@ -99,6 +99,13 @@ The **GemBot scan** workflow now runs by itself every 30 minutes. You can also s
 **Actions → GemBot scan → Run workflow**. The first run saves what it sees; alarms and roundups
 start as soon as something scores high enough.
 
+> **Expect a quiet start without the optional extras.** With only the Discord token, GemBot sees
+> Steam and itch.io listings plus Reddit's RSS (no votes or comments, and only until 13 Nov 2026).
+> Most of a Gem Score comes from people reacting (comments, engagement, several platforms), so
+> listing-only games usually land below the roundup line of 45: on the first live smoke run the
+> best one scored 39.8. Adding **Bluesky** (free, see [Optional extras](#optional-extras)) is the
+> single biggest improvement.
+
 > **Want to see it work before waiting?** Run **Actions → Smoke test → Run workflow**. It checks
 > every source once and shows a table on the run page (see [Read a smoke run](#read-a-smoke-run)).
 > Tick **post_test** to also send a TEST alarm to Discord.
@@ -252,11 +259,11 @@ and the learned values are kept in the state; once a week `#gembot-status` tells
   - if a scan takes 61–120 seconds, it's ~2,900 minutes — the free quota runs out around day 21
     (with a payment method, the extra ≈ 900 min × $0.006 ≈ **$5–6/month**; without one, Actions
     pauses until the 1st).
-  - **Run time (an estimate, not measured on a live repo yet):** a scan is dominated by polite
-    pauses between Steam (2 s) and itch.io (1 s) requests, so expect roughly **40–90 seconds**
-    of scanning **plus 20–40 seconds** of job setup (checkout, Python, install). Most scans will
-    therefore bill **2 minutes**, which does *not* fit in 2,000 free minutes at 48 runs a day.
-    On a private repo, either scan hourly (change the `cron` line in
+  - **Run time (measured on the first smoke run, 4 Oct 2026):** about **105 seconds** of
+    scanning (mostly Steam's polite 2-second pauses: ~60 s collecting, ~30 s reading store
+    details for the shortlist) **plus ~15 seconds** of job setup, so a scan job takes about
+    2 minutes and bills **2 minutes**. That does *not* fit in 2,000 free minutes at 48 runs a
+    day. On a private repo, either scan hourly (change the `cron` line in
     `.github/workflows/scan.yml` to `"7 * * * *"`: ~1,490 minutes/month) or lower
     `steam.max_new_apps_per_run` / Steam `max_pages` in `config/sources.yaml`. Check yours:
     open any **GemBot scan** run (the duration is shown at the top) or run the **Smoke test**,

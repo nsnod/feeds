@@ -216,6 +216,21 @@ def test_smoke_post_test_posts_to_the_alarm_channel(tmp_path):
     assert StateStore(state_dir).load().meta.run_count == 0
 
 
+def test_render_summary_names_games_and_shows_the_thresholds():
+    from gembot.models import Features, ScoreResult
+    from gembot.pipeline import RunResult
+
+    result = RunResult(now=NOW)
+    result.results = {
+        "steam:1": ScoreResult(game_id="steam:1", score=39.8, features=Features(), reasons=["#1 on Steam"]),
+        "steam:2": ScoreResult(game_id="steam:2", score=30.0, features=Features(), reasons=[]),
+    }
+    text = render_summary(result, seconds=1.0, titles={"steam:1": "Moon | Soup"}, thresholds=(45, 72))
+    assert "| 39.8 | Moon \\| Soup (`steam:1`) | #1 on Steam |" in text
+    assert "| 30.0 | `steam:2` |" in text
+    assert "needs **45**+, an alarm **72**+" in text
+
+
 def test_render_summary_truncates_huge_output():
     from gembot.collectors.base import SourceReport
     from gembot.pipeline import RunResult

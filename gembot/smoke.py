@@ -15,6 +15,7 @@ import logging
 import shutil
 import tempfile
 import time
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 
@@ -33,7 +34,16 @@ def _cell(text: object, limit: int = 140) -> str:
     return value if len(value) <= limit else value[: limit - 1] + "…"
 
 
-def render_summary(result: RunResult, *, seconds: float, posted_test: str | None = None) -> str:
+def render_summary(
+    result: RunResult,
+    *,
+    seconds: float,
+    posted_test: str | None = None,
+    titles: Mapping[str, str] | None = None,
+    thresholds: tuple[float, float] | None = None,
+) -> str:
+    """The markdown report. ``titles`` maps game ids to names; ``thresholds`` is
+    ``(roundup_score, alarm_score)`` so readers can see how close the top games came."""
     lines = [
         "## GemBot smoke test",
         "",
@@ -70,7 +80,19 @@ def render_summary(result: RunResult, *, seconds: float, posted_test: str | None
         lines += ["| Score | Game | Why |", "|---:|---|---|"]
         for item in top:
             reason = item.reasons[0] if item.reasons else ""
-            lines.append(f"| {item.score:.1f} | `{_cell(item.game_id, 60)}` | {_cell(reason)} |")
+            name = (titles or {}).get(item.game_id)
+            game = (
+                f"{_cell(name, 60)} (`{_cell(item.game_id, 40)}`)" if name else f"`{_cell(item.game_id, 60)}`"
+            )
+            lines.append(f"| {item.score:.1f} | {game} | {_cell(reason)} |")
+        if thresholds is not None:
+            roundup, alarm = thresholds
+            lines += [
+                "",
+                f"A roundup entry needs **{roundup:g}**+, an alarm **{alarm:g}**+ plus strong signals. "
+                "Steam/itch listings alone rarely get there: comments, engagement and other "
+                "platforms (Bluesky, Reddit with a login, feeds) supply most of the score.",
+            ]
     else:
         lines.append("_No games scored (no source returned usable mentions)._")
     plan = result.plan
@@ -147,7 +169,14 @@ def run_smoke(
             except Exception as exc:  # report, don't crash the summary
                 posted = f"TEST alarm FAILED: {exc}"
     seconds = time.monotonic() - started
-    text = render_summary(result, seconds=seconds, posted_test=posted)
+    decisions = config.settings.decisions
+    text = render_summary(
+        result,
+        seconds=seconds,
+        posted_test=posted,
+        titles={game_id: game.title for game_id, game in state.games.items() if game.title},
+        thresholds=(decisions.roundup_score, decisions.alarm_score),
+    )
     print(text)
     if summary_path is not None:
         try:
