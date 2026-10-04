@@ -245,12 +245,20 @@ class ItchFeed(_Cfg):
     name: str
     url: str
     ranked: bool = True  # item order reflects popularity rank
+    max_pages: int = Field(default=1, ge=1, le=10)  # ?page=N pagination, 36 items per page
+    # Read once (page 1) when `url` is challenged by Cloudflare or gone (404/410); None = skip.
+    fallback_url: str | None = None
+    fallback_keywords: list[str] = Field(default_factory=list)  # keep only fallback games matching one
+    fallback_ranked: bool = False  # the fallback's item order is a meaningful rank
 
 
 class ItchSource(_Cfg):
     enabled: bool = True
     feeds: list[ItchFeed] = Field(default_factory=list)
     popular_feed: str = "new-and-popular"  # feed whose rank/time-on-list drives itch velocity
+    request_interval_s: float = Field(default=1.0, ge=0)  # pause between itch requests
+    max_challenges: int = Field(default=2, ge=1)  # stop all itch feeds after this many blocks per run
+    fallback_hold_hours: float = Field(default=6.0, ge=0)  # after a challenge, go straight to fallbacks
 
 
 class BlueskySource(_Cfg):
