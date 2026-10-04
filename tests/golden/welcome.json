@@ -1,0 +1,34 @@
+{
+  "embeds": [
+    {
+      "color": 5763719,
+      "description": "I look for **small indie games before they blow up**, especially chaotic co-op games you play with friends (think Lethal Company, R.E.P.O. or PEAK). Every 30 minutes I check Steam, Reddit, itch.io, Bluesky and any feeds you added, and give each game a **Gem Score** from 0 to 100 with the reasons behind it.",
+      "fields": [
+        {
+          "inline": false,
+          "name": "🚨 Gem alarms",
+          "value": "<#11>: only games that are taking off right now. Rare on purpose. Set this channel to **All Messages** notifications so your phone pings."
+        },
+        {
+          "inline": false,
+          "name": "📋 Roundups",
+          "value": "<#12>: every couple of hours, a short list of games worth a look. If nothing is good enough, I stay quiet."
+        },
+        {
+          "inline": false,
+          "name": "🩺 Status",
+          "value": "<#13>: my notes. I only speak up when a source breaks or comes back, plus a weekly note on what I learned from you."
+        },
+        {
+          "inline": false,
+          "name": "👍 / 👎 teach me",
+          "value": "Every alarm and roundup game gets 👍 and 👎. Tap 👍 if it's your kind of game and 👎 if it isn't. I read your reactions each run and slowly shift what I pay attention to (comment hype, buzz on several sites, co-op fit and so on). Only people count, never bots."
+        }
+      ],
+      "footer": {
+        "text": "I also posted a TEST alarm so you can see what a real one looks like."
+      },
+      "title": "👋 Hi, I'm GemBot!"
+    }
+  ]
+}

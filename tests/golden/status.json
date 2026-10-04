@@ -1,0 +1,9 @@
+{
+  "embeds": [
+    {
+      "color": 10070709,
+      "description": "🔴 Reddit is failing (6 runs in a row): HTTP 403\n🟢 Bluesky is back",
+      "title": "🩺 GemBot status"
+    }
+  ]
+}

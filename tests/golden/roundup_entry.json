@@ -1,0 +1,13 @@
+{
+  "embeds": [
+    {
+      "color": 5793266,
+      "description": "Gem Score ▰▰▰▰▰▰▰▱▱▱ 68\n312 upvotes in 3h on r/IndieDev (9× normal for that sub)\n[Steam](https://store.steampowered.com/app/2001/) · [Reddit r/IndieDev](https://www.reddit.com/r/IndieDev/comments/abc/gorilla_pizza_panic/) · [Bluesky](https://bsky.app/profile/dev.bsky.social/post/3kxyz)",
+      "thumbnail": {
+        "url": "https://cdn.example.com/steam/2001/header.jpg"
+      },
+      "title": "⏰ Would have alarmed · 📈 Heating up · Gorilla Pizza Panic",
+      "url": "https://store.steampowered.com/app/2001/"
+    }
+  ]
+}

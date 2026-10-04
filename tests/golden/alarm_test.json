@@ -1,0 +1,14 @@
+{
+  "content": "🧪 TEST — 🚨 **GEM ALARM:** GemBot Test Game · Gem Score 80",
+  "embeds": [
+    {
+      "color": 16731469,
+      "description": "**Gem Score** ▰▰▰▰▰▰▰▰▱▱ 80\n\n• This is a test so you can see what an alarm looks like (not a real game)\n• Real alarms show the numbers behind the score, like \"312 upvotes in 3h on r/IndieDev (9× normal for that sub)\"\n• Tap 👍 or 👎 below: on real alarms, that's how you teach me what you like\n\n> Not a real game. Real alarms link to the Steam or itch.io page and to the posts people are talking in.",
+      "footer": {
+        "text": "First seen just now · Sat 3 Oct, 12:00 UTC"
+      },
+      "timestamp": "2026-10-03T12:00:00+00:00",
+      "title": "🧪 TEST — 🚨 GEM ALARM: GemBot Test Game"
+    }
+  ]
+}

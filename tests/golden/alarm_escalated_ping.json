@@ -1,0 +1,31 @@
+{
+  "allowed_mentions": {
+    "parse": [],
+    "roles": [
+      "555000111"
+    ]
+  },
+  "content": "<@&555000111> 📈 Escalated · 🚨 **GEM ALARM:** Gorilla Pizza Panic · Gem Score 81",
+  "embeds": [
+    {
+      "color": 16731469,
+      "description": "**Gem Score** ▰▰▰▰▰▰▰▰▱▱ 81\n\n• 312 upvotes in 3h on r/IndieDev (9× normal for that sub)\n• Seen on Reddit, Bluesky and Steam in the last 24h\n• 17 different people said they wishlisted or want to play with friends\n\n> Four gorillas, one pizza oven, proximity chat and absolutely no plan.",
+      "fields": [
+        {
+          "inline": false,
+          "name": "Where people are talking",
+          "value": "[Steam](https://store.steampowered.com/app/2001/) · [Reddit r/IndieDev](https://www.reddit.com/r/IndieDev/comments/abc/gorilla_pizza_panic/) · [Bluesky](https://bsky.app/profile/dev.bsky.social/post/3kxyz)"
+        }
+      ],
+      "footer": {
+        "text": "First seen 5h ago · Sat 3 Oct, 07:00 UTC"
+      },
+      "thumbnail": {
+        "url": "https://cdn.example.com/steam/2001/header.jpg"
+      },
+      "timestamp": "2026-10-03T07:00:00+00:00",
+      "title": "📈 Escalated · 🚨 GEM ALARM: Gorilla Pizza Panic",
+      "url": "https://store.steampowered.com/app/2001/"
+    }
+  ]
+}
