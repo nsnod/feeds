@@ -1,11 +1,13 @@
 name: GemBot scan
 
-# Every 30 minutes, off the top of the hour (GitHub delays runs scheduled at :00).
-# All times are UTC. The roundup is posted from inside this run every ~2 hours, so
-# there is only ever one writer to the bot-state branch.
+# A scan every ~30 minutes. GitHub often skips scheduled slots (sometimes for hours), so the
+# schedule asks every 10 minutes (off the top of the hour, which is the busiest) and the "gate"
+# step ends a run within seconds when the last scan was less than MIN_GAP_MINUTES ago: the
+# extra slots are backups, not extra scans. All times are UTC. The roundup is posted from
+# inside this run every ~2 hours, so there is only ever one writer to the bot-state branch.
 on:
   schedule:
-    - cron: "7,37 * * * *"
+    - cron: "7,17,27,37,47,57 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -24,22 +26,44 @@ jobs:
   scan:
     runs-on: ubuntu-latest
     timeout-minutes: 8
+    env:
+      MIN_GAP_MINUTES: 25 # scheduled runs closer than this to the last scan are skipped
     steps:
       - uses: actions/checkout@v7
 
+      - name: Is a scan due? (only scheduled runs are skipped; Run workflow always scans)
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          due=true
+          if [ "${EVENT}" = "schedule" ] && git fetch -q --depth=1 origin bot-state 2>/dev/null; then
+            last="$(git log -1 --format=%ct FETCH_HEAD)"
+            age=$(( ($(date +%s) - last) / 60 ))
+            if [ "${age}" -lt "${MIN_GAP_MINUTES}" ]; then
+              due=false
+              echo "Last scan was ${age} min ago (< ${MIN_GAP_MINUTES}): this backup slot is not needed."
+            fi
+          fi
+          echo "due=${due}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-python@v7
+        if: steps.gate.outputs.due == 'true'
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
 
       - name: Install GemBot
+        if: steps.gate.outputs.due == 'true'
         run: python -m pip install --disable-pip-version-check -q -e .
 
       - name: Check out state (bot-state branch -> ./state)
+        if: steps.gate.outputs.due == 'true'
         uses: ./.github/actions/state-checkout
 
       - name: Scan, score, post, learn
+        if: steps.gate.outputs.due == 'true'
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}

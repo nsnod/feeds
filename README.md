@@ -95,7 +95,10 @@ server, the setup log tells you to add a second secret, `DISCORD_GUILD_ID` (see
 
 ### Step 4 — Done
 
-The **GemBot scan** workflow now runs by itself every 30 minutes. You can also start one by hand:
+The **GemBot scan** workflow now runs by itself about every 30 minutes. GitHub often skips
+scheduled slots, so the workflow is asked every 10 minutes and a run that finds a scan already
+happened in the last 25 minutes stops after a few seconds (those quick runs are the backups; on
+a public repo they cost nothing). You can also start one by hand:
 **Actions → GemBot scan → Run workflow**. The first run saves what it sees; alarms and roundups
 start as soon as something scores high enough.
 
@@ -300,9 +303,10 @@ and the learned values are kept in the state; once a week `#gembot-status` tells
     scanning, nearly all of it Steam's polite 2-second pause between requests (up to 60 Steam
     requests a run: ~60 s of listings, then store details for the shortlist), **plus ~15
     seconds** of job setup. A scan job takes 2–2.5 minutes and bills **2–3 minutes**, which
-    does *not* fit in 2,000 free minutes at 48 runs a day. On a private repo, either scan every
-    2 hours (change the `cron` line in `.github/workflows/scan.yml` to `"7 */2 * * *"`: ~370
-    runs ≈ 1,100 minutes/month), or lower `budgets.steam` in `config/settings.yaml` (each 10
+    does *not* fit in 2,000 free minutes at 48 runs a day. The backup slots (see Step 4) also
+    bill a minute each when they run, so on a private repo first change the `cron` line in
+    `.github/workflows/scan.yml` to a single slot, then either scan every 2 hours
+    (`"7 */2 * * *"`: ~370 runs ≈ 1,100 minutes/month), or lower `budgets.steam` in `config/settings.yaml` (each 10
     fewer Steam requests saves ~20 s) until jobs stay under 2 minutes and scan hourly
     (`"7 * * * *"`: ~1,490 minutes). Check yours: open any **GemBot scan** run (the duration is
     shown at the top) or run the **Smoke test**, whose summary prints the time. Hard limits:
@@ -352,7 +356,7 @@ run time. A smoke run never changes the bot's state.
 | Setup fails: "The bot is in N servers" | Add the `DISCORD_GUILD_ID` secret. |
 | "Missing Permissions" / "Missing Access" | Re-invite the bot with the link in step 1.5, or give the bot's role those permissions on the GemBot category. |
 | Nothing posts for a long time | That can be normal (no filler!). Run the Smoke test to see current scores, or lower `decisions.roundup_score`. |
-| Scans run hours late or skip | GitHub's scheduler has been unreliable since late Aug 2026 ("delayed during periods of high load"). Optional fix: a free external scheduler (e.g. cron-job.org) that calls `POST https://api.github.com/repos/<you>/<repo>/actions/workflows/scan.yml/dispatches` with body `{"ref":"main"}` and a fine-grained token (this repo only, *Actions: write*). |
+| Scans run hours late or skip | GitHub's scheduler has been unreliable since late Aug 2026 ("delayed during periods of high load"). The workflow already asks every 10 minutes and skips slots it doesn't need, so a scan happens as long as GitHub starts any of them; in **Actions → GemBot scan** the quick ~10-second runs are those skipped backups. If whole hours still go by with no run, also try **Disable workflow** then **Enable workflow** there. Last resort: a free external scheduler (e.g. cron-job.org) that calls `POST https://api.github.com/repos/<you>/<repo>/actions/workflows/scan.yml/dispatches` with body `{"ref":"main"}` and a fine-grained token (this repo only, *Actions: write*). |
 | Reddit shows "RSS retired" | Reddit turned off RSS on 13 Nov 2026. Add Reddit API credentials if you have them, or ignore it — the other sources keep working. |
 | Bluesky "skipped" | Add `BLUESKY_HANDLE` + `BLUESKY_APP_PASSWORD`. |
 | Bluesky login fails ("BLUESKY_APP_PASSWORD is probably wrong", "not a Bluesky account", "look mixed up", "extra text after .bsky.social", "rejected") | `BLUESKY_HANDLE` must be the full handle, like `yourname.bsky.social` (no `@`, no link, not the display name), and nothing else: "extra text" means something (often a password) was pasted after it. `BLUESKY_APP_PASSWORD` must be an App Password for that same account — it looks like `xxxx-xxxx-xxxx-xxxx` (**Settings → Privacy and security → App passwords**). Check the two secrets aren't swapped. If the error says GemBot added `.bsky.social`, that account may be someone else's: copy the full handle from the bot's profile page. GemBot tries again on the next run after you update the secret; otherwise once a day. "Daily login limit reached" means the new secrets haven't been tried yet: nothing to change, they are tried on the first run after the time shown. |
