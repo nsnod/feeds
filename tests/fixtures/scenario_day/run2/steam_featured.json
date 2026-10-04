@@ -1,0 +1,13 @@
+{
+ "coming_soon": {
+  "id": "cat_comingsoon",
+  "name": "Coming Soon",
+  "items": []
+ },
+ "new_releases": {
+  "id": "cat_newreleases",
+  "name": "New Releases",
+  "items": []
+ },
+ "status": 1
+}

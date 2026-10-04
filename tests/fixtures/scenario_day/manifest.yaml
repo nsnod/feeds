@@ -1,0 +1,22 @@
+start: '2026-10-03T06:00:00Z'
+env:
+  REDDIT_CLIENT_ID: scenario-client
+  REDDIT_CLIENT_SECRET: scenario-secret
+  BLUESKY_HANDLE: gembot-scenario.bsky.social
+  BLUESKY_APP_PASSWORD: scen-ario0-pass-word
+runs:
+- at: '2026-10-03T06:07:00Z'
+  responses: run1
+- at: '2026-10-03T06:37:00Z'
+  responses: run2
+- at: '2026-10-03T07:07:00Z'
+  responses: run3
+- at: '2026-10-03T08:07:00Z'
+  responses: run4
+  reactions:
+  - kind: alarm
+    game: steam:3141590
+    emoji: 👍
+    users: 2
+- at: '2026-10-03T08:37:00Z'
+  responses: run5

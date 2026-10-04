@@ -1,0 +1,186 @@
+{
+  "labels": 1,
+  "runs": [
+    {
+      "alarms": [],
+      "at": "2026-10-03T06:07:00Z",
+      "posted": [
+        {
+          "channel": "roundup",
+          "payload": {
+            "allowed_mentions": {
+              "parse": []
+            },
+            "content": "📋 **Gem Roundup — Sat 3 Oct, 06:07 UTC**\n3 games worth a look. React 👍/👎 on each one."
+          }
+        },
+        {
+          "channel": "roundup",
+          "payload": {
+            "allowed_mentions": {
+              "parse": []
+            },
+            "embeds": [
+              {
+                "color": 5793266,
+                "description": "Gem Score ▰▰▰▰▰▰▰▱▱▱ 70\n25 likes, 4 replies and 6 reposts in 37m on Bluesky (35× normal for Bluesky)\n[itch.io](https://sockworks.itch.io/sock-puppet-rampage) · [Bluesky](https://bsky.app/profile/did:plc:sockworks7q2mvb5h4ejz6qp/post/3msock1)",
+                "thumbnail": {
+                  "url": "https://img.itch.zone/aW1nsock-p/315x250%23c/sock-p.png"
+                },
+                "title": "Sock Puppet Rampage",
+                "url": "https://sockworks.itch.io/sock-puppet-rampage"
+              }
+            ]
+          }
+        },
+        {
+          "channel": "roundup",
+          "payload": {
+            "allowed_mentions": {
+              "parse": []
+            },
+            "embeds": [
+              {
+                "color": 5793266,
+                "description": "Gem Score ▰▰▰▰▰▰▰▱▱▱ 66\n40 upvotes and 6 comments in 1h on r/IndieDev (14× normal for that sub)\n[Steam](https://store.steampowered.com/app/3141590/) · [Reddit r/IndieDev](https://www.reddit.com/r/IndieDev/comments/gpp001/my_co-op_game_gorilla_pizza_panic_just_g/)",
+                "thumbnail": {
+                  "url": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/3141590/header.jpg?t=1759000000"
+                },
+                "title": "Gorilla Pizza Panic",
+                "url": "https://store.steampowered.com/app/3141590/"
+              }
+            ]
+          }
+        },
+        {
+          "channel": "roundup",
+          "payload": {
+            "allowed_mentions": {
+              "parse": []
+            },
+            "embeds": [
+              {
+                "color": 5793266,
+                "description": "Gem Score ▰▰▰▰▰▰▱▱▱▱ 59\nFriendslop fit: co-op horror, online co-op, 4 player\n[Steam](https://store.steampowered.com/app/3333330/) · [Reddit r/CoOpGaming](https://www.reddit.com/r/CoOpGaming/comments/lkp001/lantern_keepers_is_a_2-4_player_co-op_ho/)",
+                "thumbnail": {
+                  "url": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/3333330/header.jpg?t=1759000000"
+                },
+                "title": "Lantern Keepers",
+                "url": "https://store.steampowered.com/app/3333330/"
+              }
+            ]
+          }
+        }
+      ],
+      "roundup": [
+        "itch:sockworks/sock-puppet-rampage",
+        "steam:3141590",
+        "steam:3333330"
+      ],
+      "unmatched_requests": []
+    },
+    {
+      "alarms": [
+        "steam:3141590"
+      ],
+      "at": "2026-10-03T06:37:00Z",
+      "posted": [
+        {
+          "channel": "alarm",
+          "payload": {
+            "allowed_mentions": {
+              "parse": []
+            },
+            "content": "📈 Escalated · 🚨 **GEM ALARM:** Gorilla Pizza Panic · Gem Score 93",
+            "embeds": [
+              {
+                "color": 16731469,
+                "description": "**Gem Score** ▰▰▰▰▰▰▰▰▰▱ 93\n\n• 310 upvotes and 64 comments in 2h on r/IndieDev (77× normal for that sub)\n• 17 different people said they wishlisted or want to play with friends\n• Friendslop fit: proximity chat, proximity voice chat, online co-op\n• 🧱 Roblox-clone discourse: 7 commenters joking it's a Roblox game\n\n> Deliver pizzas as a team of gorillas with up to 4 friends. Proximity voice chat, ragdoll physics and total chaos.",
+                "fields": [
+                  {
+                    "inline": false,
+                    "name": "Where people are talking",
+                    "value": "[Steam](https://store.steampowered.com/app/3141590/) · [Reddit r/IndieDev](https://www.reddit.com/r/IndieDev/comments/gpp001/my_co-op_game_gorilla_pizza_panic_just_g/) · [Bluesky](https://bsky.app/profile/did:plc:bananabros4xq2m7kz3d5vbn/post/3mgpp01)"
+                  }
+                ],
+                "footer": {
+                  "text": "First seen 1h ago · Sat 3 Oct, 05:00 UTC"
+                },
+                "thumbnail": {
+                  "url": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/3141590/header.jpg?t=1759000000"
+                },
+                "timestamp": "2026-10-03T05:00:00+00:00",
+                "title": "📈 Escalated · 🚨 GEM ALARM: Gorilla Pizza Panic",
+                "url": "https://store.steampowered.com/app/3141590/"
+              }
+            ]
+          }
+        }
+      ],
+      "roundup": [],
+      "unmatched_requests": []
+    },
+    {
+      "alarms": [],
+      "at": "2026-10-03T07:07:00Z",
+      "posted": [],
+      "roundup": [],
+      "unmatched_requests": []
+    },
+    {
+      "alarms": [],
+      "at": "2026-10-03T08:07:00Z",
+      "posted": [
+        {
+          "channel": "roundup",
+          "payload": {
+            "allowed_mentions": {
+              "parse": []
+            },
+            "content": "📋 **Gem Roundup — Sat 3 Oct, 08:07 UTC**\n1 game worth a look. React 👍/👎 on each one."
+          }
+        },
+        {
+          "channel": "roundup",
+          "payload": {
+            "allowed_mentions": {
+              "parse": []
+            },
+            "embeds": [
+              {
+                "color": 5793266,
+                "description": "Gem Score ▰▰▰▰▰▰▰▱▱▱ 68\n48 upvotes and 11 comments in 47m on r/playmygame (20× normal for that sub)\n[itch.io](https://tavernfolk.itch.io/tiny-tavern-brawl) · [Reddit r/playmygame](https://www.reddit.com/r/playmygame/comments/ttb001/tiny_tavern_brawl_-_our_free_online_co-o/)",
+                "thumbnail": {
+                  "url": "https://img.itch.zone/aW1ntiny-t/315x250%23c/tiny-t.png"
+                },
+                "title": "Tiny Tavern Brawl",
+                "url": "https://tavernfolk.itch.io/tiny-tavern-brawl"
+              }
+            ]
+          }
+        }
+      ],
+      "roundup": [
+        "itch:tavernfolk/tiny-tavern-brawl"
+      ],
+      "unmatched_requests": []
+    },
+    {
+      "alarms": [],
+      "at": "2026-10-03T08:37:00Z",
+      "posted": [],
+      "roundup": [],
+      "unmatched_requests": []
+    }
+  ],
+  "setup_messages": 2,
+  "weights": {
+    "cross": 0.15,
+    "fit": 0.1512,
+    "fresh": 0.1008,
+    "hype": 0.1512,
+    "meme": 0.0504,
+    "underdog": 0.1446,
+    "velocity": 0.2519
+  }
+}

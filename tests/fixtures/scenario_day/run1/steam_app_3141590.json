@@ -1,0 +1,52 @@
+{
+ "3141590": {
+  "success": true,
+  "data": {
+   "type": "game",
+   "name": "Gorilla Pizza Panic",
+   "steam_appid": 3141590,
+   "required_age": 0,
+   "is_free": false,
+   "short_description": "Deliver pizzas as a team of gorillas with up to 4 friends. Proximity voice chat, ragdoll physics and total chaos.",
+   "header_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/3141590/header.jpg?t=1759000000",
+   "developers": [
+    "Banana Bros"
+   ],
+   "publishers": [
+    "Banana Bros"
+   ],
+   "categories": [
+    {
+     "id": 2,
+     "description": "Single-player"
+    },
+    {
+     "id": 1,
+     "description": "Multi-player"
+    },
+    {
+     "id": 9,
+     "description": "Co-op"
+    },
+    {
+     "id": 38,
+     "description": "Online Co-op"
+    }
+   ],
+   "genres": [
+    {
+     "id": "23",
+     "description": "Indie"
+    },
+    {
+     "id": "1",
+     "description": "Action"
+    }
+   ],
+   "release_date": {
+    "coming_soon": true,
+    "date": "Q1 2027"
+   }
+  }
+ }
+}

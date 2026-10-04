@@ -84,6 +84,8 @@ class FeatureSettings(_Cfg):
     meme_divisor: float = 5.0
     meme_min_comments: int = 10
     hype_full_intent_commenters: int = 15  # this many distinct "I want it" commenters -> volume 1.0
+    hype_confident_commenters: int = 10  # the intent *rate* counts fully from this many commenters
+    velocity_min_age_hours: float = 1.0  # younger posts are treated as 1h old (early likes are noisy)
     fresh_full_hours: float = 48.0
     fresh_zero_days: float = 14.0
     fresh_coming_soon_bonus: float = 0.2

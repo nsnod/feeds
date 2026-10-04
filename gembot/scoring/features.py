@@ -213,7 +213,7 @@ class _Candidate:
 
 
 def _engagement_velocity(mention: Mention, ctx: ScoringContext) -> _Candidate:
-    age = max(mention.age_hours(ctx.now), MIN_AGE_HOURS)
+    age = max(mention.age_hours(ctx.now), ctx.settings.features.velocity_min_age_hours or MIN_AGE_HOURS)
     eph = mention.engagement.total / age
     channel = mention.channel or mention.source
     base, _ = baseline_eph(channel, mention.source, ctx)
@@ -349,15 +349,24 @@ def _fit(
     return clamp(fit), [phrase for phrase, _ in hits], llm
 
 
-def hype_from_signals(signals: CommentSignals | None, full_intent_commenters: int) -> float:
-    """``0.5 * min(1, 2 * intent_rate) + 0.5 * volume - negative_frac`` (0 without comments)."""
+def hype_from_signals(
+    signals: CommentSignals | None, full_intent_commenters: int, confident_commenters: int = 1
+) -> float:
+    """``0.5 * min(1, 2 * intent_rate) * confidence + 0.5 * volume - negative_frac`` (0 without comments).
+
+    ``confidence = min(1, distinct_commenters / confident_commenters)``: one "wishlisted!" out of
+    two replies is not the same evidence as 10 out of 20, so the *rate* only counts fully once
+    enough different people have commented.
+    """
     if signals is None or signals.sampled <= 0:
         return 0.0
     intent = max(signals.intent_commenters, 0)
-    rate = intent / max(signals.distinct_commenters, 1)
+    distinct = max(signals.distinct_commenters, 1)
+    rate = intent / distinct
+    confidence = min(1.0, distinct / max(confident_commenters, 1))
     full = max(full_intent_commenters, 1)
     volume = clamp(math.log1p(intent) / math.log1p(full))
-    return clamp(0.5 * min(1.0, rate * 2.0) + 0.5 * volume - signals.negative_frac)
+    return clamp(0.5 * min(1.0, rate * 2.0) * confidence + 0.5 * volume - signals.negative_frac)
 
 
 def total_comments(signals: CommentSignals | None, mentions: list[Mention]) -> int:
@@ -462,7 +471,7 @@ def compute_features(
         underdog=_underdog(mentions, ctx),
         cross=cross,
         fit=fit,
-        hype=hype_from_signals(signals, fs.hype_full_intent_commenters),
+        hype=hype_from_signals(signals, fs.hype_full_intent_commenters, fs.hype_confident_commenters),
         meme=meme_from_signals(signals, comments, ctx),
         fresh=_fresh(game, steam, ctx),
     )

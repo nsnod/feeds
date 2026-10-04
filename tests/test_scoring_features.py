@@ -90,11 +90,11 @@ def test_velocity_is_log2_of_multiple_over_4(multiple, expected):
     assert evidence.baseline_eph == 5.0
 
 
-def test_velocity_uses_half_hour_floor_and_max_over_recent_mentions():
+def test_velocity_uses_one_hour_floor_and_max_over_recent_mentions():
     ctx = ctx_with(samples("r/a", [2.0] * 10) | samples("r/b", [2.0] * 10))
     brand_new = make_mention(
         "reddit", "new", channel="r/a", hours_ago=0.05, likes=4
-    )  # 4 / 0.5h = 8 eph -> 4x
+    )  # 4 / 1h floor = 4 eph -> 2x
     hot = make_mention("reddit", "hot", channel="r/b", hours_ago=1, likes=32)  # 32 eph -> 16x
     stale = make_mention("reddit", "old", channel="r/b", hours_ago=100, likes=100_000)  # outside 72h window
     features, evidence = features_for([brand_new, hot, stale], ctx=ctx)
@@ -104,8 +104,8 @@ def test_velocity_uses_half_hour_floor_and_max_over_recent_mentions():
     assert evidence.best_likes == 32
     assert evidence.eph == pytest.approx(32)
     features, evidence = features_for([brand_new], ctx=ctx)
-    assert features.velocity == pytest.approx(0.5)
-    assert evidence.eph == pytest.approx(8)
+    assert features.velocity == pytest.approx(0.25)
+    assert evidence.eph == pytest.approx(4)
 
 
 def test_stale_mention_gives_no_velocity_but_still_evidence():
@@ -541,3 +541,14 @@ def test_steam_popular_upcoming_rank_counts_as_velocity():
     plain = make_mention("steam", "124", channel="steam:comingsoon-indie-coop", rank=1, list_size=50)
     g2 = make_game("steam:124", "Other", steam_appid=124, mention_keys=[plain.key])
     assert compute_features(g2, [plain], ctx)[0].velocity == 0.0
+
+
+def test_hype_rate_needs_enough_commenters_to_count_fully():
+    from gembot.models import CommentSignals
+    from gembot.scoring.features import hype_from_signals
+
+    tiny = CommentSignals(sampled=2, distinct_commenters=2, intent_commenters=1)
+    solid = CommentSignals(sampled=20, distinct_commenters=20, intent_commenters=10)
+    assert hype_from_signals(tiny, 15, 10) < 0.3  # 1 "wishlisted!" out of 2 replies
+    assert hype_from_signals(solid, 15, 10) > 0.9
+    assert hype_from_signals(tiny, 15, 1) > 0.6  # without the confidence term it would count fully

@@ -42,7 +42,8 @@ compares each post with **that subreddit's (or platform's) normal**: the median
 engagement per hour of its posts over the last 14 days.
 
 * engagement per hour = (likes + comments + shares) ÷ hours since posting (posts younger
-  than 30 minutes count as 30 minutes old)
+  than an hour count as an hour old, because the first few likes on a 10-minute-old post
+  say very little; `features.velocity_min_age_hours`)
 * multiple = engagement per hour ÷ the channel's normal
 * **velocity = log₂(multiple) ÷ 4**, capped between 0 and 1
 
@@ -120,12 +121,15 @@ From the sampled comments, GemBot counts the **different people** who say things
 the boys" or "my friends would love this".
 
 * intent rate = those people ÷ everyone who commented
+* confidence = everyone who commented ÷ 10, capped at 1 (one "wishlisted!" out of two
+  replies is weaker evidence than 10 out of 20; `features.hype_confident_commenters`)
 * volume = log(1 + those people) ÷ log(16), capped at 1 (15 people = full marks;
   `features.hype_full_intent_commenters`)
-* **hype = ½ × min(1, 2 × intent rate) + ½ × volume − share of negative commenters**
+* **hype = ½ × min(1, 2 × intent rate) × confidence + ½ × volume − share of negative
+  commenters**
 
-> **Example:** 30 commenters, 15 of them want it, 1 calls it a scam → ½ × 1 + ½ × 1 −
-> 1/30 = **0.97**.
+> **Example:** 30 commenters, 15 of them want it, 1 calls it a scam → ½ × 1 × 1 + ½ × 1 −
+> 1/30 = **0.97**. Two replies, one of them "wishlisted!" → ½ × 1 × 0.2 + ½ × 0.25 = **0.23**.
 
 Without comments, hype is 0.
 

@@ -54,6 +54,8 @@ features:
   meme_divisor: 5
   meme_min_comments: 10
   hype_full_intent_commenters: 15
+  hype_confident_commenters: 10  # 1 "wishlisted!" out of 2 replies counts less than 10 out of 20
+  velocity_min_age_hours: 1.0    # a 10-minute-old post is treated as 1 hour old
   fresh_full_hours: 48
   fresh_zero_days: 14
   fresh_coming_soon_bonus: 0.2

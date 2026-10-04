@@ -1,0 +1,49 @@
+- regex: ^https://store\.steampowered\.com/
+  status: 503
+  body: Service Unavailable
+- url: https://www.reddit.com/api/v1/access_token
+  method: POST
+  file: reddit_token.json
+- regex: ^https://oauth\.reddit\.com/r/[^/]+/new
+  file: reddit_new.json
+- regex: ^https://oauth\.reddit\.com/r/[^/]+/rising
+  file: reddit_rising.json
+- url: https://oauth.reddit.com/comments/gpp001
+  file: reddit_comments_gpp001.json
+- url: https://oauth.reddit.com/comments/lkp001
+  file: reddit_comments_lkp001.json
+- url: https://oauth.reddit.com/comments/qtl001
+  file: reddit_comments_qtl001.json
+- url: https://oauth.reddit.com/comments/ttb001
+  file: reddit_comments_ttb001.json
+- regex: ^https://itch\.io/
+  status: 403
+  body: <!DOCTYPE html><html><head><title>Just a moment...</title></head><body><script
+    src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script></body></html>
+  headers:
+    content-type: text/html
+    cf-mitigated: challenge
+- url: https://bsky.social/xrpc/com.atproto.server.createSession
+  method: POST
+  file: bsky_session.json
+- url: https://bsky.social/xrpc/com.atproto.server.refreshSession
+  method: POST
+  file: bsky_refresh.json
+- url: https://amanita.us-east.host.bsky.network/xrpc/app.bsky.feed.searchPosts
+  file: bsky_search.json
+- url: https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread
+  params:
+    uri: at://did:plc:sockworks7q2mvb5h4ejz6qp/app.bsky.feed.post/3msock1
+  file: bsky_thread_3msock1.json
+- url: https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread
+  params:
+    uri: at://did:plc:bananabros4xq2m7kz3d5vbn/app.bsky.feed.post/3mgpp01
+  file: bsky_thread_3mgpp01.json
+- url: https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile
+  params:
+    actor: did:plc:sockworks7q2mvb5h4ejz6qp
+  file: bsky_profile_sock.json
+- url: https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile
+  params:
+    actor: did:plc:bananabros4xq2m7kz3d5vbn
+  file: bsky_profile_gorilla.json

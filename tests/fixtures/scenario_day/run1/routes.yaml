@@ -1,0 +1,73 @@
+- url: https://store.steampowered.com/search/results/
+  params:
+    filter: popularcomingsoon
+  file: steam_popular.json
+- url: https://store.steampowered.com/search/results/
+  params:
+    filter: comingsoon
+  file: steam_comingsoon.json
+- url: https://store.steampowered.com/api/featuredcategories
+  file: steam_featured.json
+- url: https://store.steampowered.com/api/appdetails
+  params:
+    appids: 2999990
+  file: steam_app_2999990.json
+- url: https://store.steampowered.com/api/appdetails
+  params:
+    appids: 3141590
+  file: steam_app_3141590.json
+- url: https://store.steampowered.com/api/appdetails
+  params:
+    appids: 3333330
+  file: steam_app_3333330.json
+- url: https://store.steampowered.com/api/appdetails
+  params:
+    appids: 3456780
+  file: steam_app_3456780.json
+- url: https://store.steampowered.com/api/appdetails
+  params:
+    appids: 3567800
+  file: steam_app_3567800.json
+- url: https://store.steampowered.com/api/appdetails
+  params:
+    appids: 3600010
+  file: steam_app_3600010.json
+- url: https://www.reddit.com/api/v1/access_token
+  method: POST
+  file: reddit_token.json
+- regex: ^https://oauth\.reddit\.com/r/[^/]+/new
+  file: reddit_new.json
+- regex: ^https://oauth\.reddit\.com/r/[^/]+/rising
+  file: reddit_rising.json
+- url: https://oauth.reddit.com/comments/gpp001
+  file: reddit_comments_gpp001.json
+- url: https://oauth.reddit.com/comments/lkp001
+  file: reddit_comments_lkp001.json
+- url: https://oauth.reddit.com/comments/qtl001
+  file: reddit_comments_qtl001.json
+- url: https://itch.io/games/new-and-popular.xml
+  file: itch_new_and_popular.xml
+- url: https://itch.io/games/newest.xml
+  file: itch_newest.xml
+- regex: ^https://itch\.io/games/new-and-popular/tag-
+  file: itch_tag.xml
+- url: https://bsky.social/xrpc/com.atproto.server.createSession
+  method: POST
+  file: bsky_session.json
+- url: https://bsky.social/xrpc/com.atproto.server.refreshSession
+  method: POST
+  file: bsky_refresh.json
+- url: https://amanita.us-east.host.bsky.network/xrpc/app.bsky.feed.searchPosts
+  file: bsky_search.json
+- url: https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread
+  params:
+    uri: at://did:plc:sockworks7q2mvb5h4ejz6qp/app.bsky.feed.post/3msock1
+  file: bsky_thread_3msock1.json
+- url: https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile
+  params:
+    actor: did:plc:sockworks7q2mvb5h4ejz6qp
+  file: bsky_profile_sock.json
+- url: https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile
+  params:
+    actor: did:plc:bananabros4xq2m7kz3d5vbn
+  file: bsky_profile_gorilla.json

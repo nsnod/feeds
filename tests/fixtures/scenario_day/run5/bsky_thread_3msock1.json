@@ -1,0 +1,110 @@
+{
+ "thread": {
+  "$type": "app.bsky.feed.defs#threadViewPost",
+  "post": {
+   "uri": "at://did:plc:sockworks7q2mvb5h4ejz6qp/app.bsky.feed.post/3msock1",
+   "cid": "bafyrei3msock1",
+   "author": {
+    "did": "did:plc:sockworks7q2mvb5h4ejz6qp",
+    "handle": "sockworks.bsky.social",
+    "displayName": "sockworks",
+    "labels": []
+   },
+   "record": {
+    "$type": "app.bsky.feed.post",
+    "text": "Sock Puppet Rampage is up on itch: a chaotic physics party game for 4 friends sockworks.itch.io/sock-puppet-rampage #indiedev",
+    "createdAt": "2026-10-03T05:30:00.000Z",
+    "langs": [
+     "en"
+    ],
+    "facets": [
+     {
+      "index": {
+       "byteStart": 78,
+       "byteEnd": 115
+      },
+      "features": [
+       {
+        "$type": "app.bsky.richtext.facet#link",
+        "uri": "https://sockworks.itch.io/sock-puppet-rampage"
+       }
+      ]
+     },
+     {
+      "index": {
+       "byteStart": 116,
+       "byteEnd": 125
+      },
+      "features": [
+       {
+        "$type": "app.bsky.richtext.facet#tag",
+        "tag": "indiedev"
+       }
+      ]
+     }
+    ]
+   },
+   "replyCount": 4,
+   "repostCount": 6,
+   "likeCount": 34,
+   "quoteCount": 0,
+   "indexedAt": "2026-10-03T05:30:00.000Z",
+   "labels": [],
+   "embed": {
+    "$type": "app.bsky.embed.external#view",
+    "external": {
+     "uri": "https://sockworks.itch.io/sock-puppet-rampage",
+     "title": "",
+     "description": "",
+     "thumb": "https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:sockworks7q2mvb5h4ejz6qp/3msock1@jpeg"
+    }
+   }
+  },
+  "replies": [
+   {
+    "$type": "app.bsky.feed.defs#threadViewPost",
+    "post": {
+     "uri": "at://did:plc:fan0000/app.bsky.feed.post/r0",
+     "cid": "bafyreireply0",
+     "author": {
+      "did": "did:plc:fan0000",
+      "handle": "fox.bsky.social",
+      "labels": []
+     },
+     "record": {
+      "$type": "app.bsky.feed.post",
+      "text": "this looks hilarious",
+      "createdAt": "2026-10-03T05:30:00.000Z"
+     },
+     "likeCount": 1,
+     "replyCount": 0,
+     "repostCount": 0,
+     "indexedAt": "2026-10-03T05:30:00.000Z"
+    },
+    "replies": []
+   },
+   {
+    "$type": "app.bsky.feed.defs#threadViewPost",
+    "post": {
+     "uri": "at://did:plc:fan0001/app.bsky.feed.post/r1",
+     "cid": "bafyreireply1",
+     "author": {
+      "did": "did:plc:fan0001",
+      "handle": "gus.bsky.social",
+      "labels": []
+     },
+     "record": {
+      "$type": "app.bsky.feed.post",
+      "text": "wishlisted",
+      "createdAt": "2026-10-03T05:30:00.000Z"
+     },
+     "likeCount": 1,
+     "replyCount": 0,
+     "repostCount": 0,
+     "indexedAt": "2026-10-03T05:30:00.000Z"
+    },
+    "replies": []
+   }
+  ]
+ }
+}

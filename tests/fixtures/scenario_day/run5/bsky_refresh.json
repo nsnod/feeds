@@ -1,0 +1,17 @@
+{
+ "did": "did:plc:gembotscenario000000000",
+ "didDoc": {
+  "id": "did:plc:gembotscenario000000000",
+  "service": [
+   {
+    "id": "#atproto_pds",
+    "type": "AtprotoPersonalDataServer",
+    "serviceEndpoint": "https://amanita.us-east.host.bsky.network"
+   }
+  ]
+ },
+ "handle": "gembot-scenario.bsky.social",
+ "accessJwt": "eyJhbGciOiJFUzI1NksifQ.SCENARIO-ACCESS-2.sig",
+ "refreshJwt": "eyJhbGciOiJFUzI1NksifQ.SCENARIO-REFRESH-2.sig",
+ "active": true
+}

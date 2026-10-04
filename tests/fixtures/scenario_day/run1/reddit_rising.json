@@ -1,0 +1,37 @@
+{
+ "kind": "Listing",
+ "data": {
+  "after": null,
+  "dist": 1,
+  "before": null,
+  "children": [
+   {
+    "kind": "t3",
+    "data": {
+     "id": "lkp001",
+     "name": "t3_lkp001",
+     "title": "Lantern Keepers is a 2-4 player co-op horror game about keeping a lighthouse lit",
+     "selftext": "We're a two-person studio, first trailer coming soon. Would love feedback!",
+     "author": "driftwood_games",
+     "subreddit": "CoOpGaming",
+     "subreddit_name_prefixed": "r/CoOpGaming",
+     "subreddit_subscribers": 120000,
+     "created_utc": 1790989200.0,
+     "score": 60,
+     "ups": 60,
+     "num_comments": 20,
+     "upvote_ratio": 0.95,
+     "url": "https://www.reddit.com/r/CoOpGaming/comments/lkp001/lantern_keepers_is_a_2-4_player_co-op_ho/",
+     "permalink": "/r/CoOpGaming/comments/lkp001/lantern_keepers_is_a_2-4_player_co-op_ho/",
+     "link_flair_text": null,
+     "thumbnail": "self",
+     "is_self": true,
+     "over_18": false,
+     "stickied": false,
+     "domain": "self.CoOpGaming",
+     "is_video": false
+    }
+   }
+  ]
+ }
+}
