@@ -428,3 +428,121 @@ def test_429_waits_for_reddit_style_reset_header():
     slept: list[float] = []
     make_http(sleep=slept.append).get("https://api.test/x", budget=Budget("s", 5))
     assert slept == [3.0]
+
+
+# ---------------------------------------------------------------- http hardening (review findings)
+
+
+def test_secrets_drop_inner_whitespace_from_pasted_tokens():
+    secrets = Secrets.from_env({"X_BEARER_TOKEN": " AAAA\nBBBB \t", "DISCORD_BOT_TOKEN": "\n"})
+    assert secrets.x_bearer_token == "AAAABBBB"
+    assert secrets.discord_bot_token is None
+
+
+def test_protocol_errors_never_echo_header_values():
+    def handler(request):
+        raise httpx.LocalProtocolError("Illegal header value b'Bearer SECRET-TOKEN'", request=request)
+
+    http = make_http(httpx.MockTransport(handler), retries=3)
+    budget = Budget("x", 10)
+    with pytest.raises(HttpError) as info:
+        http.get("https://api.test/x", budget=budget)
+    assert "SECRET-TOKEN" not in str(info.value) and "LocalProtocolError" in str(info.value)
+    assert budget.used == 1  # deterministic failure: not retried
+
+
+def test_redirect_hops_are_budgeted_and_loops_stop():
+    calls: list[str] = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        return httpx.Response(302, headers={"Location": "https://api.test/loop"})
+
+    budget = Budget("itch", 12)
+    with pytest.raises(HttpError, match="too many redirects"):
+        make_http(httpx.MockTransport(handler)).get("https://api.test/start", budget=budget)
+    assert len(calls) == budget.used == 6  # first request + 5 hops, each one charged
+
+
+def test_redirects_are_followed_and_recorded():
+    def handler(request):
+        if request.url.path == "/old":
+            return httpx.Response(301, headers={"Location": "https://api.test/new"})
+        return httpx.Response(200, json={"ok": 1})
+
+    budget = Budget("s", 5)
+    response = make_http(httpx.MockTransport(handler)).get("https://api.test/old", budget=budget)
+    assert response.json() == {"ok": 1} and str(response.url) == "https://api.test/new"
+    assert len(response.history) == 1 and budget.used == 2
+    raw = make_http(httpx.MockTransport(handler)).get(
+        "https://api.test/old", budget=Budget("s", 5), follow_redirects=False, expect=(301,)
+    )
+    assert raw.status_code == 301 and raw.headers["location"] == "https://api.test/new"
+
+
+def test_retry_after_as_http_date_and_nonsense_values():
+    from gembot.http import _retry_after_seconds
+
+    hour_later = httpx.Response(429, headers={"Retry-After": "Sat, 03 Oct 2026 13:00:00 GMT"})
+    assert _retry_after_seconds(hour_later, NOW.timestamp()) == 3600.0
+    for value in ("nan", "inf", "-inf"):
+        assert _retry_after_seconds(httpx.Response(429, headers={"Retry-After": value})) == float("inf")
+    answers = iter([hour_later, httpx.Response(200)])
+    slept: list[float] = []
+    http = make_http(httpx.MockTransport(lambda r: next(answers)), sleep=slept.append)
+    with pytest.raises(RateLimited):
+        http.get("https://api.test/x", budget=Budget("s", 5))
+    assert slept == []
+
+
+def test_response_size_cap_stops_reading():
+    class Big(httpx.SyncByteStream):
+        pulled = 0
+
+        def __iter__(self):
+            for _ in range(64):
+                Big.pulled += 1 << 20
+                yield b" " * (1 << 20)
+
+    transport = httpx.MockTransport(lambda r: httpx.Response(200, stream=Big()))
+    with pytest.raises(HttpError, match="larger than"):
+        make_http(transport).get("https://api.test/big", budget=Budget("s", 2), max_bytes=2 << 20)
+    assert Big.pulled <= 3 << 20
+    declared = httpx.MockTransport(lambda r: httpx.Response(200, headers={"Content-Length": "999999999"}))
+    with pytest.raises(HttpError, match="too large"):
+        make_http(declared).get("https://api.test/big", budget=Budget("s", 2))
+
+
+def test_trickling_response_hits_the_deadline():
+    import time as _time
+
+    class Drip(httpx.SyncByteStream):
+        def __iter__(self):
+            for _ in range(40):
+                _time.sleep(0.02)
+                yield b" "
+
+    http = make_http(httpx.MockTransport(lambda r: httpx.Response(200, stream=Drip())), deadline_s=0.1)
+    started = _time.monotonic()
+    with pytest.raises(HttpError, match="too slow"):
+        http.get("https://api.test/slow", budget=Budget("s", 2), retries=0)
+    assert _time.monotonic() - started < 0.5
+
+
+def test_budget_deadline_stops_new_requests():
+    import time as _time
+
+    budget = Budget("steam", 100, deadline=_time.monotonic() - 1)
+    assert budget.exhausted and budget.remaining == 0
+    with pytest.raises(BudgetExceeded, match="out of time"):
+        budget.take()
+
+
+def test_gzip_body_is_decoded_once():
+    import gzip
+
+    body = gzip.compress(b'{"ok": true}')
+    transport = httpx.MockTransport(
+        lambda r: httpx.Response(200, content=body, headers={"Content-Encoding": "gzip"})
+    )
+    assert make_http(transport).get_json("https://api.test/z", budget=Budget("s", 2)) == {"ok": True}

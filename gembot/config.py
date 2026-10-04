@@ -390,7 +390,10 @@ class Secrets(BaseModel):
         values: dict[str, str | None] = {}
         for field in cls.model_fields:
             raw = env.get(field.upper())
-            values[field] = raw.strip() if raw and raw.strip() else None
+            # Tokens/keys/IDs never contain whitespace: drop it all, so a wrapped or padded paste
+            # still works (and can never put a newline into an HTTP header).
+            cleaned = "".join((raw or "").split())
+            values[field] = cleaned or None
         return cls(**values)
 
     @property
