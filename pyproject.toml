@@ -25,6 +25,7 @@ dev = [
   "respx>=0.21",
   "pytest-cov>=5",
   "ruff>=0.6",
+  "actionlint-py>=1.7",
 ]
 
 [project.scripts]

@@ -29,6 +29,7 @@ jobs:
         run: |
           ruff check .
           ruff format --check .
+          actionlint
       - name: Test (coverage >= 85% on gembot/)
         run: python -m pytest --cov=gembot --cov-report=term-missing --cov-fail-under=85
       - name: Offline replay of a recorded day
