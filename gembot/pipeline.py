@@ -553,6 +553,17 @@ def _append_snapshot(mention: Mention, now: datetime) -> None:
         rank=mention.rank,
         followers=followers,
     )
+    if mention.history:
+        last = mention.history[-1]
+        same = (last.likes, last.comments, last.shares, last.rank, last.followers) == (
+            snap.likes,
+            snap.comments,
+            snap.shares,
+            snap.rank,
+            snap.followers,
+        )
+        if same:
+            return  # only changes are remembered (keeps thousands of listings small in state)
     mention.history.append(snap)
     if len(mention.history) > MAX_HISTORY:
         mention.history = mention.history[-MAX_HISTORY:]
