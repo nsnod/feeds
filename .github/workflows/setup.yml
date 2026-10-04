@@ -1,0 +1,51 @@
+name: Setup GemBot
+
+# Run this once after adding the DISCORD_BOT_TOKEN secret (Actions -> Setup GemBot ->
+# Run workflow). It is safe to run again: nothing is created twice.
+on:
+  workflow_dispatch:
+    inputs:
+      force_welcome:
+        description: "Post the welcome message and test alarm again"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # create/push the bot-state branch
+
+concurrency:
+  group: gembot
+  cancel-in-progress: false
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install GemBot
+        run: python -m pip install --disable-pip-version-check -q -e .
+
+      - name: Create the bot-state branch if needed and check it out into ./state
+        uses: ./.github/actions/state-checkout
+
+      - name: Connect once, create channels, post the welcome + test alarm
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
+          FORCE_WELCOME: ${{ inputs.force_welcome }}
+        run: |
+          if [ -z "${DISCORD_BOT_TOKEN}" ]; then
+            echo "::error::The DISCORD_BOT_TOKEN secret is missing. Add it under Settings -> Secrets and variables -> Actions (README step 2)."
+            exit 1
+          fi
+          args="--state-dir state"
+          if [ "${FORCE_WELCOME}" = "true" ]; then args="$args --force-welcome"; fi
+          python -m gembot setup $args

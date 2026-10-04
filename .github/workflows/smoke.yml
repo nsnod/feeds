@@ -1,0 +1,55 @@
+name: Smoke test
+
+# Hits every real source once, prints a summary table to the job summary, and never
+# writes state. Posts to Discord only when "post_test" is ticked.
+on:
+  workflow_dispatch:
+    inputs:
+      post_test:
+        description: "Also post a TEST alarm to #gem-alarm"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install GemBot
+        run: python -m pip install --disable-pip-version-check -q -e .
+
+      - name: Read-only copy of the state (channel ids), if it exists
+        run: |
+          if git fetch --no-tags --depth=1 origin "+refs/heads/bot-state:refs/remotes/origin/bot-state" 2>/dev/null; then
+            git worktree add --detach state origin/bot-state
+          else
+            echo "No bot-state branch yet (run 'Setup GemBot' first if you want post_test)."
+          fi
+
+      - name: Smoke test every source
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USERNAME: ${{ secrets.REDDIT_USERNAME }}
+          BLUESKY_HANDLE: ${{ secrets.BLUESKY_HANDLE }}
+          BLUESKY_APP_PASSWORD: ${{ secrets.BLUESKY_APP_PASSWORD }}
+          X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          POST_TEST: ${{ inputs.post_test }}
+        run: |
+          args="--state-dir state --summary $GITHUB_STEP_SUMMARY"
+          if [ "${POST_TEST}" = "true" ]; then args="$args --post-test"; fi
+          python -m gembot smoke $args

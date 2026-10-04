@@ -9,9 +9,10 @@ makes the offline replay (``python -m gembot replay``) and the tests possible.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from gembot.collectors import build_collectors
@@ -84,6 +85,7 @@ class Pipeline:
         llm: LLMClassifier | None = None,
         post: bool = True,
         sleep: Callable[[float], None] | None = None,
+        env: Mapping[str, str] | None = None,
     ):
         self.config = config
         self.settings = config.settings
@@ -93,6 +95,7 @@ class Pipeline:
         self.discord = discord
         self.post = post
         self.sleep = sleep
+        self.env = dict(os.environ if env is None else env)
         self.result = RunResult(now=now)
         ctx = CollectContext(config=config, http=http, now=now, state=state)
         self.collectors: dict[str, Collector] = (
@@ -107,6 +110,7 @@ class Pipeline:
     def run(self) -> RunResult:
         mentions = self.collect()
         self.update_health()
+        self.check_keepalive()
         touched = self.ingest(mentions)
         touched_games = self.resolve(touched)
         weights = current_weights(self.state.weights, self.settings.weights)
@@ -166,6 +170,37 @@ class Pipeline:
                         f"⚠️ **{name}** has failed {health.consecutive_failures} runs in a row. "
                         f"Last error: `{health.last_error}`"
                     )
+
+    def check_keepalive(self) -> None:
+        """Remind the humans before GitHub's 60-day inactivity rule disables the schedule.
+
+        ``GEMBOT_DEFAULT_BRANCH_COMMIT_TS`` (epoch seconds of the newest commit on the default
+        branch) is exported by scan.yml. Bot commits to the ``bot-state`` branch may not count
+        as "repository activity", so only real commits to the default branch are considered.
+        """
+        raw = self.env.get("GEMBOT_DEFAULT_BRANCH_COMMIT_TS", "").strip()
+        if not raw:
+            return
+        try:
+            last_commit = datetime.fromtimestamp(int(float(raw)), tz=UTC)
+        except (ValueError, OverflowError, OSError):
+            return
+        cfg = self.settings.keepalive
+        idle_days = (self.now - last_commit).days
+        if idle_days < cfg.remind_after_days:
+            return
+        meta = self.state.meta
+        if meta.keepalive_reminded_at and self.now - meta.keepalive_reminded_at < timedelta(
+            days=cfg.remind_every_days
+        ):
+            return
+        meta.keepalive_reminded_at = self.now
+        self.result.status_lines.append(
+            f"⏰ Nobody has pushed to the main branch for {idle_days} days. GitHub switches off scheduled "
+            "workflows in public repos after 60 days without activity, which would stop GemBot. Push any "
+            "small commit (e.g. edit README.md on github.com), or if scans already stopped: Actions → "
+            "GemBot scan → **Enable workflow**."
+        )
 
     # ------------------------------------------------------------------ 2 ingest
     def ingest(self, mentions: list[Mention]) -> list[str]:

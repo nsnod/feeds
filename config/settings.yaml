@@ -117,6 +117,13 @@ state:
   max_bytes: 5000000
   push_retries: 3
 
+# GitHub turns off scheduled workflows in PUBLIC repos after 60 days without repository
+# activity (bot commits to the bot-state branch may not count). GemBot reminds you in
+# #gembot-status to push any small commit to the main branch.
+keepalive:
+  remind_after_days: 45
+  remind_every_days: 7
+
 llm:
   model: "claude-haiku-4-5-20251001"
   max_calls: 40

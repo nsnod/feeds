@@ -143,6 +143,13 @@ class DiscordSettings(_Cfg):
     max_links_in_alarm: int = 5
 
 
+class KeepaliveSettings(_Cfg):
+    """GitHub disables scheduled workflows in public repos after 60 days without activity."""
+
+    remind_after_days: int = 45  # days since the last commit on the default branch
+    remind_every_days: int = 7
+
+
 class StateSettings(_Cfg):
     branch: str = "bot-state"
     games_days: int = 30
@@ -184,6 +191,7 @@ class Settings(_Cfg):
     discord: DiscordSettings = Field(default_factory=DiscordSettings)
     state: StateSettings = Field(default_factory=StateSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
+    keepalive: KeepaliveSettings = Field(default_factory=KeepaliveSettings)
 
     @field_validator("weights")
     @classmethod
@@ -383,6 +391,12 @@ class ConfigError(ValueError):
     pass
 
 
+def _default_config_dir() -> Path:
+    """``./config`` when run from a checkout, else the copy next to the package source."""
+    local = Path.cwd() / "config"
+    return local if (local / "settings.yaml").exists() else DEFAULT_CONFIG_DIR
+
+
 def _read_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -400,7 +414,7 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 def load_config(config_dir: Path | str | None = None, env: Mapping[str, str] | None = None) -> Config:
     """Load and validate every config file. Missing files fall back to defaults."""
     env = os.environ if env is None else env
-    directory = Path(config_dir or env.get("GEMBOT_CONFIG_DIR") or DEFAULT_CONFIG_DIR)
+    directory = Path(config_dir or env.get("GEMBOT_CONFIG_DIR") or _default_config_dir())
     parts: dict[str, Any] = {}
     models = (("settings", Settings), ("sources", Sources), ("feeds", Feeds), ("blocklist", Blocklist))
     for key, model in models:

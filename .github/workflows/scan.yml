@@ -1,0 +1,62 @@
+name: GemBot scan
+
+# Every 30 minutes, off the top of the hour (GitHub delays runs scheduled at :00).
+# All times are UTC. The roundup is posted from inside this run every ~2 hours, so
+# there is only ever one writer to the bot-state branch.
+on:
+  schedule:
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: score everything but post nothing and save nothing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # push the bot-state branch
+
+concurrency:
+  group: gembot
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install GemBot
+        run: python -m pip install --disable-pip-version-check -q -e .
+
+      - name: Check out state (bot-state branch -> ./state)
+        uses: ./.github/actions/state-checkout
+
+      - name: Scan, score, post, learn
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
+          ALARM_PING_ROLE_ID: ${{ secrets.ALARM_PING_ROLE_ID }}
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USERNAME: ${{ secrets.REDDIT_USERNAME }}
+          BLUESKY_HANDLE: ${{ secrets.BLUESKY_HANDLE }}
+          BLUESKY_APP_PASSWORD: ${{ secrets.BLUESKY_APP_PASSWORD }}
+          X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          # newest commit on the default branch, for the 60-day inactivity reminder
+          export GEMBOT_DEFAULT_BRANCH_COMMIT_TS="$(git log -1 --format=%ct)"
+          if [ "${DRY_RUN}" = "true" ]; then
+            python -m gembot run --state-dir state --dry-run
+          else
+            python -m gembot run --state-dir state
+          fi
