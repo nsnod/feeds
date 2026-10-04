@@ -223,11 +223,25 @@ def _engagement_velocity(mention: Mention, ctx: ScoringContext) -> _Candidate:
     return _Candidate(mention, "engagement", value, eph=eph, baseline=base, multiple=multiple)
 
 
+def popular_channels(ctx: ScoringContext) -> frozenset[str]:
+    """Ranked "popular" listings whose rank works as a velocity signal.
+
+    itch.io: the configured popular feed. Steam: every search with a ``popular*`` filter
+    (Steam's own wishlist/follow-driven "popular upcoming" list), since follower counts
+    are not available without a key (see docs/VERIFICATION.md).
+    """
+    channels = {f"itch:{ctx.sources.itch.popular_feed}"}
+    for search in ctx.sources.steam.searches:
+        if str(search.params.get("filter", "")).startswith("popular"):
+            channels.add(f"steam:{search.name}")
+    return frozenset(channels)
+
+
 def _itch_velocity(mention: Mention, ctx: ScoringContext) -> _Candidate:
-    popular = f"itch:{ctx.sources.itch.popular_feed}"
+    """Rank-based velocity for a ranked listing (itch.io New & Popular, Steam popular upcoming)."""
     ranked = sorted((s for s in mention.history if s.rank is not None), key=lambda s: s.at)
     rank = mention.rank if mention.rank is not None else (ranked[-1].rank if ranked else None)
-    if mention.channel != popular or rank is None or rank < 1:
+    if mention.channel not in popular_channels(ctx) or rank is None or rank < 1:
         return _Candidate(mention, "none")
     now = ctx.now
     if mention.observed_at and now - mention.observed_at > timedelta(hours=ITCH_STALE_HOURS):
@@ -243,6 +257,9 @@ def _itch_velocity(mention: Mention, ctx: ScoringContext) -> _Candidate:
 
 
 def _steam_velocity(mention: Mention, ctx: ScoringContext) -> _Candidate:
+    ranked = _itch_velocity(mention, ctx)
+    if ranked.kind == "itch_rank":
+        return ranked
     cutoff = ctx.now - timedelta(days=STEAM_FOLLOWER_WINDOW_DAYS)
     snaps = sorted(
         (s for s in mention.history if s.followers is not None and s.at >= cutoff), key=lambda s: s.at

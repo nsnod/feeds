@@ -113,8 +113,11 @@ def _velocity_lines(result: ScoreResult, strength: float) -> list[_Reason]:
     if ev.best_rank is not None:
         hours = ev.hours_on_list or 0.0
         tail = f"for {fmt_hours(hours)}" if hours >= 1 else "(just arrived)"
-        itch_line = f"#{ev.best_rank} on itch.io {feed_label(ev.rank_channel)} {tail}"
-    if source == "itch" and itch_line:
+        if (ev.rank_channel or "").startswith("steam:"):
+            itch_line = f"#{ev.best_rank} on Steam's popular upcoming list {tail}"
+        else:
+            itch_line = f"#{ev.best_rank} on itch.io {feed_label(ev.rank_channel)} {tail}"
+    if source in ("itch", "steam") and itch_line and not (source == "steam" and ev.follower_growth):
         return [_Reason(itch_line, strength)]
     if source == "steam" and ev.follower_growth:
         lines.append(

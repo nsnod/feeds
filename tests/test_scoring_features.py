@@ -512,3 +512,32 @@ def test_every_feature_stays_in_unit_interval():
         features, _ = compute_features(game, mentions, ctx, signals)
         for name, value in features.as_dict().items():
             assert 0.0 <= value <= 1.0, (name, value)
+
+
+def test_steam_popular_upcoming_rank_counts_as_velocity():
+    from datetime import timedelta
+
+    from gembot.models import Snapshot
+    from gembot.scoring.explain import build_reasons
+    from gembot.scoring.features import ScoringContext, compute_features, popular_channels
+    from gembot.scoring.score import score_game
+    from tests.factories import NOW, make_config, make_game, make_mention
+
+    config = make_config()
+    ctx = ScoringContext.from_config(config, now=NOW)
+    channel = next(c for c in popular_channels(ctx) if c.startswith("steam:"))
+    m = make_mention("steam", "123", title="Gorilla Pizza Panic", channel=channel, rank=2, list_size=50)
+    m.first_seen = NOW - timedelta(hours=30)
+    m.observed_at = NOW
+    m.history = [Snapshot(at=NOW - timedelta(hours=30), rank=6), Snapshot(at=NOW, rank=2)]
+    game = make_game("steam:123", "Gorilla Pizza Panic", steam_appid=123, mention_keys=[m.key])
+    features, evidence = compute_features(game, [m], ctx)
+    assert features.velocity > 0.9
+    assert evidence.best_rank == 2 and evidence.rank_channel == channel
+    result = score_game(game, [m], ctx, config.settings.weights, config.blocklist)
+    lines = build_reasons(result, game, now=NOW)
+    assert any("Steam's popular upcoming list" in line for line in lines)
+    # a plain coming-soon listing (not the popular list) gives no rank velocity
+    plain = make_mention("steam", "124", channel="steam:comingsoon-indie-coop", rank=1, list_size=50)
+    g2 = make_game("steam:124", "Other", steam_appid=124, mention_keys=[plain.key])
+    assert compute_features(g2, [plain], ctx)[0].velocity == 0.0
