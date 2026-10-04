@@ -138,6 +138,9 @@ repository secret**). Everything works without them; each one turns on more.
 | `ALARM_PING_ROLE_ID` | Alarms also @mention this role. | Turn on Developer Mode (phone: You → Settings → App Settings → Advanced → Developer Mode; desktop: User Settings → Advanced). Then Server Settings → Roles → long-press/right-click the role → **Copy Role ID**. In the role's settings turn on **Allow anyone to @mention this role**. |
 | `DISCORD_GUILD_ID` | Needed only if the bot is in more than one server. | With Developer Mode on: long-press/right-click the server icon → **Copy Server ID**. |
 
+`ALARM_PING_ROLE_ID` and `DISCORD_GUILD_ID` are just IDs, not passwords; they live with the
+secrets only so everything is set up in one place.
+
 ### X (paid)
 
 X stopped offering a free API tier for new developers in February 2026; it is now **pay-per-use**
@@ -149,10 +152,12 @@ X stopped offering a free API tier for new developers in February 2026; it is no
    your hard stop.
 3. Copy the app's **Bearer Token** (Keys and tokens) into the `X_BEARER_TOKEN` secret.
 
-GemBot asks for at most 25 new posts per run and only posts newer than the last one it saw. Rough
-cost: about 5 new posts per run ≈ $20/month; the worst case (25 every run) ≈ $180/month. It also
-stops itself when `x.monthly_read_budget` in `config/sources.yaml` is reached. To turn X off,
-delete the secret.
+GemBot asks for at most 25 new posts per run and only posts newer than the last one it saw.
+Rough cost with 48 scans a day: about 5 new posts per run ≈ 7,200 posts ≈ **$36/month**; 25 every
+run would be ≈ $180/month. That's why GemBot **pauses X for the rest of the month** once
+`x.monthly_read_budget` in `config/sources.yaml` is reached (default 3,000 posts ≈ **$15/month**).
+Smoke tests and dry runs read X too (up to 25 posts each) but can't record that in the budget,
+so your spending limit on X is the real hard stop. To turn X off, delete the secret.
 
 ---
 
@@ -186,7 +191,8 @@ address that lists an account's newest posts — in `config/feeds.yaml`.
    Click **Commit changes**. The next scan uses it.
 7. **`audience`**: these feeds don't include follower numbers, so type the count you see on the
    profile (write `25000`, not `25K`). It powers the "small creator, big reaction" part of the
-   score. Leave it out and GemBot assumes a small account.
+   score. Leave it out and that part of the score simply doesn't count for this feed (GemBot
+   doesn't guess).
 
 **RSS.app limits (checked Oct 2026; prices change, see rss.app/pricing):** the **Free plan** allows
 **2 feeds**, refreshed **once every 24 hours**, showing the latest **5 posts**. Paid plans start
@@ -246,12 +252,16 @@ and the learned values are kept in the state; once a week `#gembot-status` tells
   - if a scan takes 61–120 seconds, it's ~2,900 minutes — the free quota runs out around day 21
     (with a payment method, the extra ≈ 900 min × $0.006 ≈ **$5–6/month**; without one, Actions
     pauses until the 1st).
-  - **Measured run time:** a full offline replay of a busy day takes a few seconds; a live scan is
-    dominated by polite pauses between Steam (2 s) and itch.io (1 s) requests, so expect roughly
-    **40–90 seconds**. Check yours: open any **GemBot scan** run — the duration is shown at the
-    top — or run the **Smoke test**, whose summary prints the time. If you're on a private repo
-    and runs take over a minute, lower `steam.max_new_apps_per_run` / Steam `max_pages` in
-    `config/sources.yaml`.
+  - **Run time (an estimate, not measured on a live repo yet):** a scan is dominated by polite
+    pauses between Steam (2 s) and itch.io (1 s) requests, so expect roughly **40–90 seconds**
+    of scanning **plus 20–40 seconds** of job setup (checkout, Python, install). Most scans will
+    therefore bill **2 minutes**, which does *not* fit in 2,000 free minutes at 48 runs a day.
+    On a private repo, either scan hourly (change the `cron` line in
+    `.github/workflows/scan.yml` to `"7 * * * *"`: ~1,490 minutes/month) or lower
+    `steam.max_new_apps_per_run` / Steam `max_pages` in `config/sources.yaml`. Check yours:
+    open any **GemBot scan** run (the duration is shown at the top) or run the **Smoke test**,
+    whose summary prints the time. Hard limits: sources stop after 3 minutes, enrichment after
+    5, and the job is cancelled at 8.
 - Optional paid extras: X (see [above](#x-paid)), Claude (tiny), RSS.app beyond 2 feeds.
 
 ---

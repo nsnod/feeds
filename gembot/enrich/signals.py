@@ -25,6 +25,7 @@ Rules:
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Iterable
 
@@ -275,9 +276,17 @@ def _snippet(text: str) -> str:
 
 
 def analyze_comments(
-    comments: list[Comment], *, post_author: str | None = None, post_comment_count: int = 0
+    comments: list[Comment],
+    *,
+    post_author: str | None = None,
+    post_comment_count: int = 0,
+    platform: str | None = None,
 ) -> CommentSignals:
-    """Count intent / negativity / Roblox discourse in a sample of comments for one post."""
+    """Count intent / negativity / Roblox discourse in a sample of comments for one post.
+
+    ``platform`` (the mention's source) keeps "alex" on Reddit and "alex" elsewhere apart
+    when a game's posts are merged.
+    """
     owner = _author_key(post_author)
     sampled = 0
     anonymous = 0
@@ -326,7 +335,32 @@ def analyze_comments(
         intent_examples=[text for _, text in intent_examples],
         negative_terms=terms[:MAX_TERMS],
         roblox_examples=[text for _, text in roblox_examples],
+        commenter_ids=_person_ids(commenters, platform),
+        intent_ids=_person_ids(intent_people, platform),
+        negative_ids=_person_ids(negative_people, platform),
+        roblox_ids=_person_ids(roblox_people, platform),
     )
+
+
+MAX_PERSON_IDS = 200  # per post and category; keeps the stored signals small
+
+
+def _person_ids(people: set[str], platform: str | None) -> list[str]:
+    """Short, stable hashes of commenter names (anonymous ones can't be matched across posts)."""
+    ids = {
+        hashlib.sha1(f"{platform or ''}:{who}".encode()).hexdigest()[:10]
+        for who in people
+        if not who.startswith("#anonymous-")
+    }
+    return sorted(ids)[:MAX_PERSON_IDS]
+
+
+def _distinct(items: list[CommentSignals], count: str, ids: str) -> tuple[int, list[str]]:
+    """Sum of the per-post counts minus the people seen under more than one post."""
+    total = sum(getattr(i, count) for i in items)
+    listed = [x for i in items for x in getattr(i, ids)]
+    union = sorted(set(listed))
+    return max(total - (len(listed) - len(union)), 0), union
 
 
 def _add_example(examples: list[tuple[str, str]], who: str, text: str) -> None:
@@ -345,20 +379,32 @@ def _merge_lists(lists: Iterable[list[str]], limit: int) -> list[str]:
 
 
 def merge_signals(items: list[CommentSignals]) -> CommentSignals:
-    """Add up the signals of several posts about one game (counts are summed)."""
+    """Add up the signals of several posts about one game.
+
+    Comment counts are summed; people are counted once even when they commented under
+    several of the game's posts (matched by ``*_ids``).
+    """
     items = [item for item in items if item is not None]
     if not items:
         return CommentSignals()
+    commenters, commenter_ids = _distinct(items, "distinct_commenters", "commenter_ids")
+    intent, intent_ids = _distinct(items, "intent_commenters", "intent_ids")
+    negative, negative_ids = _distinct(items, "negative_commenters", "negative_ids")
+    roblox, roblox_ids = _distinct(items, "roblox_commenters", "roblox_ids")
     return CommentSignals(
         sampled=sum(i.sampled for i in items),
-        distinct_commenters=sum(i.distinct_commenters for i in items),
+        distinct_commenters=commenters,
         intent_comments=sum(i.intent_comments for i in items),
-        intent_commenters=sum(i.intent_commenters for i in items),
-        negative_commenters=sum(i.negative_commenters for i in items),
+        intent_commenters=intent,
+        negative_commenters=negative,
         roblox_comments=sum(i.roblox_comments for i in items),
-        roblox_commenters=sum(i.roblox_commenters for i in items),
+        roblox_commenters=roblox,
         post_comment_count=sum(i.post_comment_count for i in items),
         intent_examples=_merge_lists((i.intent_examples for i in items), MAX_EXAMPLES),
         negative_terms=_merge_lists((i.negative_terms for i in items), MAX_TERMS),
         roblox_examples=_merge_lists((i.roblox_examples for i in items), MAX_EXAMPLES),
+        commenter_ids=commenter_ids,
+        intent_ids=intent_ids,
+        negative_ids=negative_ids,
+        roblox_ids=roblox_ids,
     )

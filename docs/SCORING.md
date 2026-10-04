@@ -131,7 +131,8 @@ GemBot takes the best of three clues:
 
 From the sampled comments, GemBot counts the **different people** who say things like
 "wishlisted", "take my money", "day one", "when does it come out", "playtest?", "me and
-the boys" or "my friends would love this".
+the boys" or "my friends would love this". Someone who comments under two of the game's posts
+(say a crosspost to two subreddits) is still one person.
 
 * intent rate = those people ÷ everyone who commented
 * confidence = everyone who commented ÷ 10, capped at 1 (one "wishlisted!" out of two

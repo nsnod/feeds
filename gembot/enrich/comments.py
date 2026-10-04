@@ -84,7 +84,10 @@ def enrich_game_comments(
         mention.comments = comments
         mention.comments_fetched_at = now
         mention.signals = analyze_comments(
-            comments, post_author=mention.author, post_comment_count=mention.engagement.comments
+            comments,
+            post_author=mention.author,
+            post_comment_count=mention.engagement.comments,
+            platform=mention.source,
         )
     return merge_signals([m.signals for m in own if m.signals is not None])
 

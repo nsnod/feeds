@@ -270,6 +270,12 @@ class CommentSignals(_Model):
     intent_examples: list[str] = Field(default_factory=list)
     negative_terms: list[str] = Field(default_factory=list)
     roblox_examples: list[str] = Field(default_factory=list)
+    # Short hashes of who was counted (not names), so merging a game's posts counts each person
+    # once: the same 8 fans under a crosspost are 8 people, not 16.
+    commenter_ids: list[str] = Field(default_factory=list)
+    intent_ids: list[str] = Field(default_factory=list)
+    negative_ids: list[str] = Field(default_factory=list)
+    roblox_ids: list[str] = Field(default_factory=list)
 
     @property
     def negative_frac(self) -> float:

@@ -17,7 +17,7 @@ import re
 from datetime import datetime
 from typing import Any
 
-from gembot.models import GemCard, ensure_utc
+from gembot.models import GemCard, clean_text, ensure_utc
 
 # --- Discord limits (https://discord.com/developers/docs/resources/message#embed-object-embed-limits)
 TITLE_LIMIT = 256
@@ -52,7 +52,7 @@ DEFAULT_CHANNEL_NAMES = {"alarm": "gem-alarm", "roundup": "gem-roundup", "status
 
 def text_units(text: str) -> int:
     """Length in UTF-16 code units (an emoji like 🚨 counts as 2)."""
-    return len(text.encode("utf-16-le")) // 2
+    return len(text.encode("utf-16-le", "surrogatepass")) // 2
 
 
 def _prefix_within(text: str, limit: int) -> str:
@@ -135,7 +135,8 @@ _MD_SPECIAL = re.compile(r"([\\*_~`|>\[\]<])")
 def escape_markdown(text: str) -> str:
     """Show text from the internet literally: no bold/strike/spoilers, no masked links, no
     ``<@…>``/``<#…>`` mentions. (Pings are already impossible: ``allowed_mentions`` is locked.)"""
-    return _MD_SPECIAL.sub(r"\\\1", text)
+    # "](" is also broken up, so no renderer can see a masked link in "[text](url)"
+    return _MD_SPECIAL.sub(r"\\\1", text).replace("\\](", "\\]\\(")
 
 
 def _md_label(label: str) -> str:
@@ -213,12 +214,19 @@ def alarm_payload(card: GemCard, *, ping_role_id: str | None = None, now: dateti
         f"Gem Score {score_int(card.score)}"
     )
     payload: dict[str, Any] = {"embeds": [embed]}
-    if ping_role_id:
-        payload["content"] = f"<@&{ping_role_id}> {content}"
-        payload["allowed_mentions"] = {"parse": [], "roles": [str(ping_role_id)]}
+    role = _role_id(ping_role_id)
+    if role:
+        payload["content"] = f"<@&{role}> {content}"
+        payload["allowed_mentions"] = {"parse": [], "roles": [role]}
     else:
         payload["content"] = content
     return enforce_limits(payload)
+
+
+def _role_id(value: str | None) -> str | None:
+    """A role ID as digits only (``<@&123>`` is unwrapped); anything else means "no ping"."""
+    bare = str(value or "").strip().removeprefix("<@&").removesuffix(">")
+    return bare if bare.isdigit() else None
 
 
 def roundup_header_payload(now: datetime, count: int, *, up: str = "👍", down: str = "👎") -> dict:
@@ -409,9 +417,20 @@ def _shrink_to_total(embeds: list[dict]) -> None:
             return
 
 
+def _clean_strings(value: Any) -> Any:
+    """Every string in a payload with lone surrogates replaced (they can't be sent as UTF-8)."""
+    if isinstance(value, str):
+        return clean_text(value)
+    if isinstance(value, dict):
+        return {key: _clean_strings(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_clean_strings(item) for item in value]
+    return value
+
+
 def enforce_limits(payload: dict) -> dict:
     """Return a deep copy of ``payload`` that respects every Discord message/embed limit."""
-    out = copy.deepcopy(payload)
+    out = _clean_strings(copy.deepcopy(payload))
     if isinstance(out.get("content"), str):
         out["content"] = truncate(out["content"], CONTENT_LIMIT)
     if "embeds" in out:

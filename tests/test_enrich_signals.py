@@ -277,3 +277,19 @@ def test_merge_signals_sums_counts_and_caps_examples():
     assert merged.post_comment_count == 30
     assert merged.intent_examples == ["wishlisted", "take my money", "need this"]
     assert merge_signals([]) == CommentSignals()
+
+
+def test_merge_counts_people_once_across_a_games_posts():
+    authors = [f"fan{i}" for i in range(8)] + ["meh1", "meh2"]
+    texts = ["Wishlisted! me and the boys need this"] * 8 + ["cool", "nice"]
+    one = analyze_comments(make_comments(texts, authors=authors), post_comment_count=10, platform="reddit")
+    two = analyze_comments(make_comments(texts, authors=authors), post_comment_count=10, platform="reddit")
+    merged = merge_signals([one, two])
+    assert merged.intent_commenters == 8 and merged.distinct_commenters == 10
+    assert merged.intent_comments == 16 and merged.sampled == 20  # comments still add up
+    elsewhere = analyze_comments(
+        make_comments(texts, authors=authors), post_comment_count=10, platform="bluesky"
+    )
+    assert merge_signals([one, elsewhere]).intent_commenters == 16  # same names, other platform
+    old = one.model_copy(update={"intent_ids": []})  # signals stored before ids existed
+    assert merge_signals([old, two]).intent_commenters == 16
