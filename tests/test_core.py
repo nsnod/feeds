@@ -400,3 +400,31 @@ def test_per_request_retry_override():
     with pytest.raises(RateLimited):
         make_http(sleep=slept.append, retries=3).get("https://api.test/x", budget=b, retries=0)
     assert slept == [] and b.used == 1
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        ({"x-ratelimit-reset": "12"}, 12.0),  # Reddit: seconds until reset
+        ({"ratelimit-reset": str(int(NOW.timestamp()) + 9)}, 9.0),  # Bluesky: unix time
+        ({"x-rate-limit-reset": str(int(NOW.timestamp()) - 5)}, 0.0),  # already passed
+        ({"x-ratelimit-reset": "soon"}, None),
+    ],
+)
+def test_retry_after_from_rate_limit_reset_headers(headers, expected):
+    from gembot.http import _retry_after_seconds
+
+    response = httpx.Response(429, headers=headers, text="slow down")
+    assert _retry_after_seconds(response, NOW.timestamp()) == expected
+    if expected is not None and "ratelimit-reset" in headers:
+        assert _retry_after_seconds(response) is None  # epoch values need a clock
+
+
+@respx.mock
+def test_429_waits_for_reddit_style_reset_header():
+    respx.get("https://api.test/x").mock(
+        side_effect=[httpx.Response(429, headers={"x-ratelimit-reset": "3"}), httpx.Response(200, json={})]
+    )
+    slept: list[float] = []
+    make_http(sleep=slept.append).get("https://api.test/x", budget=Budget("s", 5))
+    assert slept == [3.0]

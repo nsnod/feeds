@@ -69,7 +69,13 @@ class Budget:
         self.used += 1
 
 
-def _retry_after_seconds(response: httpx.Response) -> float | None:
+_EPOCH_CUTOFF = 1_000_000_000  # larger "reset" values are unix timestamps, smaller ones are seconds
+
+
+def _retry_after_seconds(response: httpx.Response, now_ts: float | None = None) -> float | None:
+    """How long a 429 asks us to wait, from (in order) ``Retry-After``, a JSON ``retry_after``
+    (Discord), or a rate-limit reset header (Reddit ``x-ratelimit-reset`` = seconds,
+    Bluesky ``ratelimit-reset`` / X ``x-rate-limit-reset`` = unix time)."""
     header = response.headers.get("retry-after")
     if header:
         try:
@@ -79,12 +85,25 @@ def _retry_after_seconds(response: httpx.Response) -> float | None:
     try:
         body = response.json()
     except Exception:
-        return None
+        body = None
     if isinstance(body, dict) and "retry_after" in body:
         try:
             return max(float(body["retry_after"]), 0.0)
         except (TypeError, ValueError):
-            return None
+            pass
+    for name in ("x-ratelimit-reset", "ratelimit-reset", "x-rate-limit-reset"):
+        raw = response.headers.get(name)
+        if not raw:
+            continue
+        try:
+            value = float(raw)
+        except ValueError:
+            continue
+        if value > _EPOCH_CUTOFF:
+            if now_ts is None:
+                continue
+            value -= now_ts
+        return max(value, 0.0)
     return None
 
 
@@ -179,7 +198,7 @@ class HttpClient:
 
             status = response.status_code
             if status == 429:
-                wait = _retry_after_seconds(response)
+                wait = _retry_after_seconds(response, self.clock().timestamp())
                 wait = 2.0 * attempt if wait is None else wait
                 if attempt > max_retries or wait > self.max_backoff_s:
                     raise RateLimited(

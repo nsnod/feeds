@@ -28,7 +28,6 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Iterable, Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
@@ -717,10 +716,10 @@ class BlueskyCollector(Collector):
             }
 
         try:
-            with self._single_attempt():
-                reply = self._xrpc(
-                    "POST", self._entryway() + CREATE_SESSION, json_body=body, expect=(200, 400, 401)
-                )
+            # createSession counts against a tiny daily limit: never let the HTTP layer retry it.
+            reply = self._xrpc(
+                "POST", self._entryway() + CREATE_SESSION, json_body=body, expect=(200, 400, 401), retries=0
+            )
         except HttpError as exc:  # 429 / 5xx / network: worth retrying in a later run
             remember(f"createSession failed: {exc}", fatal=False)
             raise
@@ -797,16 +796,6 @@ class BlueskyCollector(Collector):
             secrets = self.config.secrets
             self._box = SessionBox(secrets.bluesky_handle or "", secrets.bluesky_app_password or "")
         return self._box
-
-    @contextmanager
-    def _single_attempt(self) -> Iterator[None]:
-        """createSession counts against a tiny daily limit: never let the HTTP layer retry it."""
-        saved = self.http.retries
-        self.http.retries = 0
-        try:
-            yield
-        finally:
-            self.http.retries = saved
 
     # ---- search (both modes) --------------------------------------------
     def _run_terms(
@@ -894,11 +883,19 @@ class BlueskyCollector(Collector):
         headers: dict[str, str] | None = None,
         json_body: Any = None,
         expect: tuple[int, ...] = (200, 400, 401, 403),
+        retries: int | None = None,
     ) -> _Reply:
         """One XRPC request. Statuses in ``expect`` come back as a :class:`_Reply` to classify;
         429/5xx/transport errors are retried and raised by the HTTP layer."""
         response = self.http.request(
-            method, url, budget=self.budget, params=params, headers=headers, json=json_body, expect=expect
+            method,
+            url,
+            budget=self.budget,
+            params=params,
+            headers=headers,
+            json=json_body,
+            expect=expect,
+            retries=retries,
         )
         html = "text/html" in response.headers.get("content-type", "").lower()
         data: Any = None

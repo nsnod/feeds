@@ -10,12 +10,14 @@ if TYPE_CHECKING:
 
 def collector_classes() -> list[type[Collector]]:
     """Every collector, in the order they run (Steam first: other posts link to it)."""
+    from gembot.collectors.bluesky import BlueskyCollector
     from gembot.collectors.itch import ItchCollector
+    from gembot.collectors.reddit import RedditCollector
     from gembot.collectors.rss import RssCollector
     from gembot.collectors.steam import SteamCollector
     from gembot.collectors.x import XCollector
 
-    return [SteamCollector, ItchCollector, RssCollector, XCollector]
+    return [SteamCollector, RedditCollector, ItchCollector, BlueskyCollector, RssCollector, XCollector]
 
 
 def build_collectors(ctx: CollectContext) -> dict[str, Collector]:
