@@ -231,6 +231,8 @@ class Publisher:
                 break
             except HttpError as exc:
                 log.warning("discord: could not post roundup entry %s: %s", card.game_id, exc)
+                if getattr(exc, "blocked", False):  # Discord/Cloudflare blocked us: stop for this run
+                    break
                 continue
             message_id = str(message["id"])
             self._react(channel_id, message_id)

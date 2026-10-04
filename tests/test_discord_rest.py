@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 import httpx
 import pytest
@@ -120,7 +121,7 @@ def test_add_reaction_url_encodes_emoji_and_expects_204(client):
         == b"/api/v10/channels/9/messages/555/reactions/%F0%9F%91%8D/@me"
     )
     client.add_reaction("9", "555", "gem:123456")
-    assert route.calls.last.request.url.raw_path.endswith(b"/reactions/gem:123456/@me")
+    assert route.calls.last.request.url.raw_path.endswith(b"/reactions/gem%3A123456/@me")
     assert emoji_path("👎") == "%F0%9F%91%8E"
 
 
@@ -151,9 +152,31 @@ def test_get_message_and_reaction_users(client):
     )
     assert client.get_message("9", "555")["reactions"][0]["count"] == 2
     assert client.get_reaction_users("9", "555", "👍") == [{"id": "1"}, {"id": "2", "bot": True}]
-    assert users.calls.last.request.url.params["limit"] == "100"
-    client.get_reaction_users("9", "555", "👍", limit=500)
-    assert users.calls.last.request.url.params["limit"] == "100"
+    params = users.calls.last.request.url.params
+    assert params["limit"] == "100"  # always sent: Discord's own default is only 25
+    assert "after" not in params and "type" not in params
+    client.get_reaction_users("9", "555", "👍", limit=500, after="1234", burst=True)
+    params = users.calls.last.request.url.params
+    assert (params["limit"], params["after"], params["type"]) == ("100", "1234", "1")
+
+
+@respx.mock
+def test_message_accepted_without_embeds_warns_about_embed_links(client, caplog):
+    respx.post(f"{API}/channels/9/messages").mock(
+        side_effect=[
+            httpx.Response(200, json={"id": "1", "embeds": []}),
+            httpx.Response(200, json={"id": "2", "embeds": [{"title": "ok"}]}),
+            httpx.Response(200, json={"id": "3", "content": "plain", "embeds": []}),
+        ]
+    )
+    with caplog.at_level(logging.WARNING):
+        assert client.send_message("9", {"embeds": [{"title": "Gem"}]})["id"] == "1"
+    assert "lacks Embed Links" in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        client.send_message("9", {"embeds": [{"title": "ok"}]})
+        client.send_message("9", {"content": "plain"})
+    assert caplog.text == ""
 
 
 # ---------------------------------------------------------------- rate limits
@@ -265,7 +288,7 @@ def test_unauthorized_errors_explain_token_and_gateway(client):
             ),
         ]
     )
-    with pytest.raises(DiscordError, match="connect to the Discord gateway once") as info:
+    with pytest.raises(DiscordError, match=r"DISCORD_BOT_TOKEN.*optional insurance") as info:
         client.send_message("9", {"content": "hi"})
     assert info.value.code == 40001
     with pytest.raises(DiscordError) as info:
@@ -301,6 +324,53 @@ def test_error_body_without_code_and_invalid_json(client):
     respx.get(f"{API}/users/@me/guilds").mock(return_value=httpx.Response(200, text="<html>"))
     with pytest.raises(DiscordError, match="invalid JSON"):
         client.list_guilds()
+
+
+@respx.mock
+def test_cloudflare_403_block_raises_at_once_and_stops_all_calls(client):
+    route = respx.get(f"{API}/users/@me").mock(return_value=httpx.Response(403, text="error code: 1010"))
+    with pytest.raises(DiscordError) as info:
+        client.me()
+    err = info.value
+    assert err.blocked and err.status == 403 and err.code is None
+    assert "error code: 1010" in str(err) and "next run will retry" in str(err)
+    with pytest.raises(DiscordError) as again:
+        client.list_guilds()  # no request is made once blocked
+    assert again.value is err and route.call_count == 1 and client.budget.used == 1
+
+
+@respx.mock
+def test_cloudflare_429_is_not_looped_and_is_explained(slept):
+    http = make_http(sleep=slept.append, retries=2)
+    client = DiscordClient(TOKEN, http, Budget("discord", 50), clock=Clock())
+    route = respx.post(f"{API}/channels/9/messages").mock(
+        return_value=httpx.Response(429, text="error code: 1015")
+    )
+    with pytest.raises(DiscordError, match="temporarily blocked this runner's IP") as info:
+        client.send_message("9", {"content": "hi"})
+    assert info.value.blocked and info.value.status == 429
+    assert route.call_count == 3  # HttpClient's bounded retries, then never again this run
+    with pytest.raises(DiscordError):
+        client.send_message("9", {"content": "hi"})
+    assert route.call_count == 3
+
+
+@respx.mock
+def test_discord_429_longer_than_we_wait_blocks_the_run(client, slept):
+    respx.get(f"{API}/users/@me").mock(
+        return_value=httpx.Response(429, json={"message": "You are being rate limited.", "retry_after": 600})
+    )
+    with pytest.raises(DiscordError) as info:
+        client.me()
+    assert info.value.blocked and slept == []
+
+
+@respx.mock
+def test_non_json_errors_other_than_403_429_are_not_blocks(client):
+    respx.get(f"{API}/users/@me").mock(return_value=httpx.Response(404, text="Not Found"))
+    with pytest.raises(DiscordError) as info:
+        client.me()
+    assert not info.value.blocked and client.blocked is None
 
 
 @respx.mock
@@ -351,23 +421,45 @@ def test_fake_messages_and_reactions():
     message = fake.send_message(channel_id, {"content": "hi"})
     assert fake.sent == [(channel_id, {"content": "hi", "allowed_mentions": {"parse": []}})]
     assert fake.messages_in(channel_id)[0]["id"] == message["id"]
+    assert "reactions" not in fake.get_message(channel_id, message["id"])  # omitted, like Discord
 
     fake.add_reaction(channel_id, message["id"], "👍")
     fake.react(channel_id, message["id"], "👍", "7")
     fake.react(channel_id, message["id"], "👍", "7")  # same user twice counts once
+    fake.react(channel_id, message["id"], "👍", "9", burst=True)
     fake.react(channel_id, message["id"], "👎", "8", bot=True)
     got = fake.get_message(channel_id, message["id"])
     assert got["reactions"] == [
-        {"emoji": {"id": None, "name": "👍"}, "count": 2, "me": True},
-        {"emoji": {"id": None, "name": "👎"}, "count": 1, "me": False},
+        {
+            "emoji": {"id": None, "name": "👍"},
+            "count": 3,
+            "count_details": {"burst": 1, "normal": 2},
+            "me": True,
+            "me_burst": False,
+        },
+        {
+            "emoji": {"id": None, "name": "👎"},
+            "count": 1,
+            "count_details": {"burst": 0, "normal": 1},
+            "me": False,
+            "me_burst": False,
+        },
     ]
     users = fake.get_reaction_users(channel_id, message["id"], "👍")
-    assert users == [{"id": "1000", "username": "user1000", "bot": True}, {"id": "7", "username": "user7"}]
+    assert users == [{"id": "7", "username": "user7"}, {"id": "1000", "username": "user1000", "bot": True}]
     assert fake.get_reaction_users(channel_id, message["id"], "👍", limit=1) == users[:1]
+    assert fake.get_reaction_users(channel_id, message["id"], "👍", after="7") == users[1:]
+    assert fake.get_reaction_users(channel_id, message["id"], "👍", burst=True) == [
+        {"id": "9", "username": "user9"}
+    ]
 
     fake.unreact(channel_id, message["id"], "👎", "8")
     fake.unreact(channel_id, message["id"], "👍", "7")
+    fake.unreact(channel_id, message["id"], "👍", "9", burst=True)
     assert [r["emoji"]["name"] for r in fake.get_message(channel_id, message["id"])["reactions"]] == ["👍"]
+    fake.react(channel_id, message["id"], "x", "a")
+    fake.react(channel_id, message["id"], "x", "b")
+    assert [u["id"] for u in fake.get_reaction_users(channel_id, message["id"], "x", after="a")] == ["b"]
 
 
 def test_fake_errors_and_failure_injection():

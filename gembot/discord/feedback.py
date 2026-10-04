@@ -19,7 +19,7 @@ from types import ModuleType
 from typing import Any
 
 from gembot.config import FeedbackSettings
-from gembot.discord.rest import DiscordAPI, DiscordError
+from gembot.discord.rest import REACTION_PAGE, DiscordAPI, DiscordError
 from gembot.http import Budget, BudgetExceeded, HttpError
 from gembot.models import LabelExample, PostedMessage, PostedState, WeightChange, WeightsState
 
@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 READ_KINDS = ("alarm", "roundup")
 GONE_CODES = (10003, 10008)  # unknown channel / unknown message: deleted on Discord
 MAX_HISTORY = 500
-_IGNORED_IN_EMOJI = {chr(c) for c in range(0x1F3FB, 0x1F400)} | {"️"}  # skin tones, VS16
+_IGNORED_IN_EMOJI = {chr(c) for c in range(0x1F3FB, 0x1F400)} | {chr(0xFE0F)}  # skin tones, VS16
 
 
 def _weights_module() -> ModuleType:
@@ -73,6 +73,42 @@ def _is_due(message: PostedMessage, now: datetime, settings: FeedbackSettings) -
     return now - last >= timedelta(minutes=settings.recheck_minutes)
 
 
+def _reacting_users(
+    api: DiscordAPI, message: PostedMessage, key: str, *, burst: bool, budget: Budget
+) -> list[dict]:
+    """Every user behind one reaction, 100 per page (``after`` = last user id), each page budgeted."""
+    users: list[dict] = []
+    after: str | None = None
+    while True:
+        budget.take()
+        kwargs: dict[str, Any] = {"limit": REACTION_PAGE}
+        if after:
+            kwargs["after"] = after
+        if burst:
+            kwargs["burst"] = True
+        page = api.get_reaction_users(message.channel_id, message.message_id, key, **kwargs)
+        users.extend(page)
+        if len(page) < REACTION_PAGE:
+            return users
+        last = str(page[-1].get("id") or "")
+        if not last or last == after:  # no progress: stop instead of looping
+            return users
+        after = last
+
+
+def _others(reaction: dict[str, Any]) -> tuple[int, int]:
+    """(normal, super) reactions on one emoji that are not the bot's own.
+
+    ``count`` includes super reactions and the bot's own; ``count_details`` splits them.
+    """
+    me = 1 if reaction.get("me") else 0
+    me_burst = 1 if reaction.get("me_burst") else 0
+    details = reaction.get("count_details")
+    if isinstance(details, dict):
+        return int(details.get("normal") or 0) - me, int(details.get("burst") or 0) - me_burst
+    return int(reaction.get("count") or 0) - me - me_burst, 0
+
+
 def count_human_reactions(
     api: DiscordAPI,
     message: PostedMessage,
@@ -81,29 +117,29 @@ def count_human_reactions(
     budget: Budget,
     bot_user_id: str | None,
 ) -> tuple[int, int]:
-    """``(up, down)`` = distinct human users who reacted 👍 / 👎 (any skin tone).
+    """``(up, down)`` = distinct human users who reacted 👍 / 👎 (any skin tone, super reactions too).
 
-    One ``get_message`` call, plus one ``get_reaction_users`` call per matching emoji that
-    has reactions beyond the bot's own. Each call is charged to ``budget``.
+    One ``get_message`` call, then the user lists only for emojis that have reactions beyond
+    the bot's own (paged, 100 users per call). Every call is charged to ``budget``. Users with
+    ``"bot": true`` (the key is absent for people) and ``bot_user_id`` never count.
     """
     budget.take()
     data = api.get_message(message.channel_id, message.message_id)
     people: dict[str, set[str]] = {"up": set(), "down": set()}
-    for reaction in data.get("reactions") or []:
+    for reaction in data.get("reactions", []) or []:  # the key is omitted when there are none
         key = _emoji_key(reaction.get("emoji") or {})
         direction = _direction(key, settings)
         if direction is None:
             continue
-        others = int(reaction.get("count") or 0) - (1 if reaction.get("me") else 0)
-        if others <= 0:  # only the bot's own reaction
-            continue
-        budget.take()
-        users = api.get_reaction_users(message.channel_id, message.message_id, key, limit=100)
-        for user in users:
-            user_id = str(user.get("id") or "")
-            if not user_id or user.get("bot") or (bot_user_id and user_id == str(bot_user_id)):
+        normal, burst = _others(reaction)
+        for is_burst, extra in ((False, normal), (True, burst)):
+            if extra <= 0:  # only the bot's own reaction (or none)
                 continue
-            people[direction].add(user_id)
+            for user in _reacting_users(api, message, key, burst=is_burst, budget=budget):
+                user_id = str(user.get("id") or "")
+                if not user_id or user.get("bot") or (bot_user_id and user_id == str(bot_user_id)):
+                    continue
+                people[direction].add(user_id)
     return len(people["up"]), len(people["down"])
 
 
@@ -136,6 +172,9 @@ def collect_reactions(
             log.info("feedback: reaction budget used up, %d message(s) left for later runs", len(due) - index)
             break
         except DiscordError as exc:
+            if exc.blocked:
+                log.warning("feedback: stopped reading reactions: %s", exc)
+                break
             if exc.code in GONE_CODES:
                 log.info("feedback: message %s was deleted on Discord", message.message_id)
                 message.reactions_checked_at = now
