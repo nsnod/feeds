@@ -1,4 +1,7 @@
 {
 "games":{},
-"messages":{}
+"messages":{
+"1556204278023200789":{"channel_id":"1556204276907249746","entries":[],"kind":"welcome","last_down":0,"last_up":0,"message_id":"1556204278023200789","posted_at":"2026-10-04T07:20:06.904650Z"},
+"1556204279029702662":{"channel_id":"1556204274642452490","entries":[],"kind":"test","last_down":0,"last_up":0,"message_id":"1556204279029702662","posted_at":"2026-10-04T07:20:06.904650Z"}
+}
 }

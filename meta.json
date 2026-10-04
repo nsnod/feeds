@@ -7,7 +7,11 @@
 },
 "daily_alarms":{},
 "discord":{
-"channels":{}
+"bot_user_id":"1556201279582109746",
+"category_id":"1556204273774231622",
+"channels":{"alarm":"1556204274642452490","roundup":"1556204275078791300","status":"1556204276907249746"},
+"guild_id":"1248443834304565319",
+"welcome_message_id":"1556204278023200789"
 },
 "game_aliases":{},
 "http_cache":{},
