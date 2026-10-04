@@ -130,12 +130,16 @@ class HttpClient:
         conditional: bool = False,
         follow_redirects: bool = True,
         expect: tuple[int, ...] = (200,),
+        retries: int | None = None,
     ) -> httpx.Response:
         """Send a request, charging ``budget`` for every attempt.
 
         Returns the response when its status is in ``expect`` (or 304 for conditional
         requests). Raises :class:`BudgetExceeded`, :class:`RateLimited` or :class:`HttpError`.
+        ``retries`` overrides the client's retry count for this call (``0`` = never retry,
+        e.g. for hosts that escalate to blocks when you retry a 429).
         """
+        max_retries = self.retries if retries is None else max(retries, 0)
         hdrs = dict(headers or {})
         cache_key = str(httpx.URL(url, params=params)) if conditional else None
         if cache_key and cache_key in self.cache:
@@ -161,7 +165,7 @@ class HttpClient:
                     follow_redirects=follow_redirects,
                 )
             except httpx.HTTPError as exc:
-                if attempt <= self.retries:
+                if attempt <= max_retries:
                     self.sleep(min(2.0 * attempt, self.max_backoff_s))
                     continue
                 raise HttpError(f"{budget.name}: {type(exc).__name__}: {exc}", url=url) from exc
@@ -170,12 +174,12 @@ class HttpClient:
             if status == 429:
                 wait = _retry_after_seconds(response)
                 wait = 2.0 * attempt if wait is None else wait
-                if attempt > self.retries or wait > self.max_backoff_s:
+                if attempt > max_retries or wait > self.max_backoff_s:
                     raise RateLimited(f"{budget.name}: rate limited (429), retry after {wait:.1f}s", 429, url)
                 log.info("%s: 429, sleeping %.1fs", budget.name, wait)
                 self.sleep(wait)
                 continue
-            if status >= 500 and attempt <= self.retries:
+            if status >= 500 and attempt <= max_retries:
                 self.sleep(min(2.0 * attempt, self.max_backoff_s))
                 continue
             if status == 304 and conditional:

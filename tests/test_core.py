@@ -390,3 +390,13 @@ def test_scratch_is_persisted_in_state_or_throwaway():
     c = S(_ctx())
     c.run()
     assert c.scratch() == {"cursor": 7}
+
+
+@respx.mock
+def test_per_request_retry_override():
+    respx.get("https://api.test/x").mock(return_value=httpx.Response(429, headers={"Retry-After": "1"}))
+    slept: list[float] = []
+    b = Budget("s", 10)
+    with pytest.raises(RateLimited):
+        make_http(sleep=slept.append, retries=3).get("https://api.test/x", budget=b, retries=0)
+    assert slept == [] and b.used == 1
