@@ -792,9 +792,20 @@ def test_the_same_feed_url_twice_is_read_once_and_both_entries_are_named(tmp_pat
     feeds = feeds_from(tmp_path, copy)
     assert [f.name for f in feeds.feeds] == REAL_NAMES
     assert feeds.problems == [
-        'line 17: feed #4 "NewCreator (TikTok)": same url as feed #1 "GameGil (@officialgamegil)" (line 3), so '
-        "it is not read twice - put this feed's own URL here"
+        'line 17: feed #4 "NewCreator (TikTok)": has the same url as feed #1 "GameGil (@officialgamegil)" '
+        "(line 3), so only that one is read - one of the two needs its own URL (a copied feed whose URL "
+        "wasn't changed?)"
     ]
+    # the copy pasted ABOVE the original: the advice must not tell the original to change its URL
+    above = REAL_FEEDS.replace(
+        "feeds:\n",
+        'feeds:\n  - name: "NewCreator (TikTok)"\n    url: "https://rss.app/feeds/K1vwmXudAkt1exqO.xml"\n'
+        "    source: tiktok\n",
+        1,
+    )
+    problems = feeds_from(tmp_path, above).problems
+    assert len(problems) == 1 and "one of the two needs its own URL" in problems[0]
+    assert "put this feed's own URL" not in problems[0]
     exact = REAL_FEEDS + (  # http / www. / case of the host / trailing "/" make no difference
         '\n  - name: "GameGil (@officialgamegil)"\n    url: "http://www.RSS.app/feeds/K1vwmXudAkt1exqO.xml/"\n'
         "    source: instagram\n"
@@ -942,3 +953,15 @@ def test_the_readme_says_which_feeds_yaml_mistakes_stop_which_feeds():
     assert "only skips that feed" in section and "pauses all your feeds" in section
     smoke = readme.split("### Read a smoke run", 1)[1].split("\n### ", 1)[0]
     assert "(the feeds that are fine still ran)" not in smoke
+
+
+@pytest.mark.parametrize(
+    ("written", "meant"), [("ig", "instagram"), ("Insta", "instagram"), ("yt", "youtube"), ("TT", "tiktok")]
+)
+def test_short_platform_names_are_read_as_the_platform_with_a_note(tmp_path, written, meant):
+    feeds = feeds_from(
+        tmp_path,
+        f"feeds:\n  - name: A\n    url: https://rss.app/feeds/AbCdEfGhIjKlMnOp.xml\n    source: {written}\n",
+    )
+    assert [f.source for f in feeds.feeds] == [meant]
+    assert len(feeds.problems) == 1 and f"read as '{meant}'" in feeds.problems[0]

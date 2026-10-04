@@ -246,8 +246,9 @@ What a mistake stops:
 
 Common mistakes:
 
-- **A feed added without its `- `** in front of `name:`. It is still read, but add the `- `, in
-  line with the `- ` of the feed above.
+- **A feed added without its `- `** in front of `name:`. If its lines are indented like the feed
+  above it is usually still read (otherwise YAML can't read the file at all); either way, add the
+  `- `, in line with the `- ` of the feed above.
 - **An extra or indented `feeds:` line** inside a feed (e.g. under `audience:`). Delete it (and
   move any feeds indented under it back in line with the others): the file has exactly one
   `feeds:` line, at the very top.

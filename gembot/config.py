@@ -1064,21 +1064,29 @@ def _read_feed(
         )
         if first is not feed:
             same = first.name.strip().lower() == feed.name.strip().lower() and first.source == feed.source
+            # GemBot can't tell which of the two holds the right URL (a copied block may sit above
+            # or below the original), so the advice names both and blames neither.
             text = (
                 f"the same feed as {first_label} (line {first_line}); read once - delete one of the two"
                 if same
-                else f"same url as {first_label} (line {first_line}), so it is not read twice - put this "
-                "feed's own URL here"
+                else f"has the same url as {first_label} (line {first_line}), so only that one is read - "
+                "one of the two needs its own URL (a copied feed whose URL wasn't changed?)"
             )
             problems.append((url_line, f"{_at(url_line)}{label}: {text}"))
             return None, nested
     return feed, nested
 
 
+# Short names people use for the feed platforms (read as the platform, with a note).
+_SOURCE_ABBREVIATIONS = {"ig": "instagram", "insta": "instagram", "yt": "youtube", "tt": "tiktok"}
+
+
 def _source_typo(source: str) -> str | None:
-    """The feed platform a misspelled ``source`` means (``yotube``, ``instagarm``, ``tik tok``), else
-    None. Only a close typo counts: one slip in tiktok / youtube, two in instagram, none in rss."""
+    """The feed platform a misspelled ``source`` means (``yotube``, ``instagarm``, ``tik tok``, ``yt``),
+    else None. Only a close typo counts: one slip in tiktok / youtube, two in instagram, none in rss."""
     squeezed = re.sub(r"[\s_-]+", "", source)
+    if squeezed in _SOURCE_ABBREVIATIONS:
+        return _SOURCE_ABBREVIATIONS[squeezed]
     for platform in FEED_PLATFORMS:
         allowed = 2 if len(platform) >= 8 else 1 if len(platform) >= 5 else 0
         if _typo_distance(squeezed, platform, allowed) <= allowed:
