@@ -22,7 +22,7 @@ from gembot.collectors.rss import (
 )
 from gembot.config import FeedConfig, Feeds
 from gembot.http import Budget
-from gembot.models import Engagement, Mention
+from gembot.models import MAX_TITLE_CHARS, Engagement, Mention
 from tests.factories import NOW, fixture_path, make_config, make_http
 
 IG = FeedConfig(
@@ -979,5 +979,6 @@ def test_long_fields_are_clipped_before_regex_work():
         "summary": "<p>" + "w " * limit + "</p><a href='https://late.example.com/'>late</a>",
     }
     mention = entry_to_mention(entry, {}, BLOG, now=NOW)
-    assert len(mention.title) == limit and len(mention.text) == rss_module.MAX_TEXT_CHARS
+    # the Mention model keeps titles to MAX_TITLE_CHARS on top of the collector's clip
+    assert len(mention.title) == MAX_TITLE_CHARS and len(mention.text) == rss_module.MAX_TEXT_CHARS
     assert mention.links == ["https://b.example.com/post"]  # the href past the limit is not read
