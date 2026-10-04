@@ -22,8 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import math
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
@@ -82,30 +81,29 @@ class XCollector(Collector):
     def collect(self) -> list[Mention]:
         queries = self.settings.queries
         self._prune_since_ids(queries)
-        with self._watch_rate_limit_headers():
-            for query in queries:
-                label = f'query "{_clip(query, 40)}"'
-                if not query.strip():
-                    continue
-                if len(query) > MAX_QUERY_CHARS:
-                    self._fail(
-                        label,
-                        f"query is {len(query)} characters but X allows at most {MAX_QUERY_CHARS}; "
-                        "skipped (shorten it in config/sources.yaml)",
-                    )
-                    continue
-                if self.monthly_remaining() == 0:
-                    self.report.warnings.append(f"{self._monthly_message()}; remaining queries skipped")
-                    break
-                fatal = False
-                with self.guard(label):
-                    try:
-                        self._search(query, label)
-                    except XApiError as exc:
-                        fatal = exc.fatal
-                        raise
-                if fatal:
-                    break
+        for query in queries:
+            label = f'query "{_clip(query, 40)}"'
+            if not query.strip():
+                continue
+            if len(query) > MAX_QUERY_CHARS:
+                self._fail(
+                    label,
+                    f"query is {len(query)} characters but X allows at most {MAX_QUERY_CHARS}; "
+                    "skipped (shorten it in config/sources.yaml)",
+                )
+                continue
+            if self.monthly_remaining() == 0:
+                self.report.warnings.append(f"{self._monthly_message()}; remaining queries skipped")
+                break
+            fatal = False
+            with self.guard(label):
+                try:
+                    self._search(query, label)
+                except XApiError as exc:
+                    fatal = exc.fatal
+                    raise
+            if fatal:
+                break
         return self.found
 
     # ---- one search --------------------------------------------------
@@ -172,6 +170,7 @@ class XCollector(Collector):
                 retries=0,
             )
         except RateLimited as exc:
+            self._rate_headers = exc.headers
             raise XApiError(self._rate_limit_message(), 429, fatal=True) from exc
         except HttpError as exc:
             if exc.status is not None and exc.status >= 500:
@@ -243,24 +242,6 @@ class XCollector(Collector):
         self.report.failed_units += 1
         self.report.errors.append(f"{label}: {message}")
         self.log.warning("%s: %s", label, message)
-
-    @contextmanager
-    def _watch_rate_limit_headers(self) -> Iterator[None]:
-        """Remember the latest search response headers while collecting.
-
-        ``HttpClient`` turns a 429 into ``RateLimited`` without exposing the response, so a
-        response hook on the shared client is how we read ``x-rate-limit-reset``.
-        """
-
-        def hook(response: httpx.Response) -> None:  # installed only while this collector runs
-            self._rate_headers = response.headers
-
-        hooks = self.http.client.event_hooks["response"]
-        hooks.append(hook)
-        try:
-            yield
-        finally:
-            hooks.remove(hook)
 
     def _rate_limit_message(self) -> str:
         reset = _opt_int(self._rate_headers.get("x-rate-limit-reset")) if self._rate_headers else None

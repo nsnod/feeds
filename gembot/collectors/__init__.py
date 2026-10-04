@@ -13,8 +13,9 @@ def collector_classes() -> list[type[Collector]]:
     from gembot.collectors.itch import ItchCollector
     from gembot.collectors.rss import RssCollector
     from gembot.collectors.steam import SteamCollector
+    from gembot.collectors.x import XCollector
 
-    return [SteamCollector, ItchCollector, RssCollector]
+    return [SteamCollector, ItchCollector, RssCollector, XCollector]
 
 
 def build_collectors(ctx: CollectContext) -> dict[str, Collector]:

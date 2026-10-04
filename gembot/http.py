@@ -32,10 +32,17 @@ class BudgetExceeded(RuntimeError):
 class HttpError(RuntimeError):
     """A request failed for good (after retries). ``status`` is None for transport errors."""
 
-    def __init__(self, message: str, status: int | None = None, url: str | None = None):
+    def __init__(
+        self,
+        message: str,
+        status: int | None = None,
+        url: str | None = None,
+        headers: httpx.Headers | None = None,
+    ):
         super().__init__(message)
         self.status = status
         self.url = url
+        self.headers = headers  # response headers, when there was a response (e.g. rate-limit resets)
 
 
 class RateLimited(HttpError):
@@ -175,7 +182,12 @@ class HttpClient:
                 wait = _retry_after_seconds(response)
                 wait = 2.0 * attempt if wait is None else wait
                 if attempt > max_retries or wait > self.max_backoff_s:
-                    raise RateLimited(f"{budget.name}: rate limited (429), retry after {wait:.1f}s", 429, url)
+                    raise RateLimited(
+                        f"{budget.name}: rate limited (429), retry after {wait:.1f}s",
+                        429,
+                        url,
+                        response.headers,
+                    )
                 log.info("%s: 429, sleeping %.1fs", budget.name, wait)
                 self.sleep(wait)
                 continue
@@ -192,7 +204,7 @@ class HttpClient:
                         at=self.clock(),
                     )
                 return response
-            raise HttpError(f"{budget.name}: HTTP {status} for {_short(url)}", status, url)
+            raise HttpError(f"{budget.name}: HTTP {status} for {_short(url)}", status, url, response.headers)
 
     def get(self, url: str, *, budget: Budget, **kwargs: Any) -> httpx.Response:
         return self.request("GET", url, budget=budget, **kwargs)
