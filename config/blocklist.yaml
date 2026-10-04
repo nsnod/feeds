@@ -1,0 +1,58 @@
+# Games whose developer OR publisher matches one of these companies are excluded entirely.
+# Matching ignores case and punctuation and also catches suffixes such as
+# "Ubisoft Montreal" or "Electronic Arts Inc.". Add or remove names freely.
+companies:
+  - Activision
+  - Blizzard Entertainment
+  - Electronic Arts
+  - EA Games
+  - Ubisoft
+  - Take-Two Interactive
+  - 2K
+  - Rockstar Games
+  - Bethesda Softworks
+  - Xbox Game Studios
+  - Microsoft Studios
+  - Sony Interactive Entertainment
+  - PlayStation Publishing
+  - Nintendo
+  - Square Enix
+  - Bandai Namco Entertainment
+  - Capcom
+  - SEGA
+  - Konami
+  - Warner Bros. Games
+  - Epic Games
+  - Valve
+  - Krafton
+  - NetEase Games
+  - Tencent Games
+  - CD PROJEKT RED
+  - Riot Games
+  - Embracer Group
+  - Plaion
+  - Deep Silver
+  - THQ Nordic
+  - Focus Entertainment
+  - Nexon
+  - NCSOFT
+  - Paradox Interactive
+  - Gearbox Publishing
+  - Level-5
+  - Koei Tecmo
+  - Hoyoverse
+  - miHoYo
+
+# Mentions or games containing any of these words/phrases are dropped.
+keywords:
+  - nft
+  - crypto
+  - play to earn
+  - play-to-earn
+  - web3
+  - blockchain
+  - hentai
+  - nsfw
+  - porn
+  - casino
+  - gambling

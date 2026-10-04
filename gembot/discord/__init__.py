@@ -1,0 +1,1 @@
+"""GemBot discord package."""

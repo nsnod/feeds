@@ -1,0 +1,138 @@
+# Where GemBot looks. Edit freely; see README.md -> "Tuning".
+
+steam:
+  enabled: true
+  cc: us
+  lang: english
+  # Steam user-tag IDs (verified, see docs/VERIFICATION.md)
+  tags:
+    indie: 492
+    coop: 1685
+    online_coop: 3843
+    multiplayer: 3859
+  # store.steampowered.com/search/results/ queries. "tags" is a comma list of tag IDs (AND).
+  searches:
+    - name: comingsoon-indie-online-coop
+      params: {filter: comingsoon, tags: "492,3843", category1: 998, sort_by: Released_DESC}
+    - name: comingsoon-indie-coop
+      params: {filter: comingsoon, tags: "492,1685", category1: 998, sort_by: Released_DESC}
+    - name: comingsoon-indie-multiplayer
+      params: {filter: comingsoon, tags: "492,3859", category1: 998, sort_by: Released_DESC}
+    - name: popular-comingsoon-indie-coop
+      params: {filter: popularcomingsoon, tags: "492,1685", category1: 998}
+  featured_categories: true      # also read api/featuredcategories "coming_soon" / "new_releases"
+  # appdetails category IDs (verified, see docs/VERIFICATION.md)
+  coop_category_ids: [9, 38, 39, 48]        # Co-op, Online Co-op, Shared/Split Screen Co-op, LAN Co-op
+  multiplayer_category_ids: [1, 27, 36, 49] # Multi-player, Cross-Platform Multiplayer, Online PvP, PvP
+  early_access_genre_id: 70
+  max_new_apps_per_run: 25
+  track_followers: false         # community hub follower counts (see VERIFICATION.md)
+
+reddit:
+  enabled: true
+  subreddits:
+    - IndieGaming
+    - indiegames
+    - IndieDev
+    - playmygame
+    - CoOpGaming
+    - SoloDevelopment
+    - DestroyMyGame
+    - godot
+    - Unity3D
+    - unrealengine
+    - gamedev
+  listings: [new, rising]
+  limit: 50
+  comments_limit: 100
+  max_post_age_hours: 72
+
+itch:
+  enabled: true
+  popular_feed: new-and-popular
+  feeds:
+    - {name: new-and-popular, url: "https://itch.io/games/new-and-popular.xml"}
+    - {name: newest, url: "https://itch.io/games/newest.xml", ranked: false}
+    - {name: tag-multiplayer, url: "https://itch.io/games/new-and-popular/tag-multiplayer.xml"}
+    - {name: tag-co-op, url: "https://itch.io/games/new-and-popular/tag-co-op.xml"}
+    - {name: tag-local-multiplayer, url: "https://itch.io/games/new-and-popular/tag-local-multiplayer.xml"}
+    - {name: tag-horror, url: "https://itch.io/games/new-and-popular/tag-horror.xml"}
+    - {name: tag-physics, url: "https://itch.io/games/new-and-popular/tag-physics.xml"}
+
+bluesky:
+  enabled: true
+  terms:
+    - '"proximity chat"'
+    - "#indiedev co-op"
+    - "#screenshotsaturday multiplayer"
+    - '"wishlist" co-op'
+    - '"announce trailer" indie'
+    - friendslop
+    - '"co-op horror"'
+    - '"with friends" #indiegame'
+  limit: 50
+  sort: latest
+  lang: en
+  pds_host: "https://bsky.social"
+  public_appview: "https://public.api.bsky.app"
+  max_post_age_hours: 72
+
+x:
+  enabled: true          # only runs when the X_BEARER_TOKEN secret is set (paid API)
+  queries:
+    - '("proximity chat" OR friendslop OR "co-op horror") (game OR steam OR wishlist) -is:retweet lang:en'
+  max_results: 25
+  api_base: "https://api.x.com/2"
+
+resolver:
+  fuzzy_threshold: 90
+  lookback_days: 30
+  shortener_hosts:
+    - bit.ly
+    - t.co
+    - tinyurl.com
+    - buff.ly
+    - ow.ly
+    - dlvr.it
+    - s.team
+    - goo.gl
+    - rebrand.ly
+    - linktr.ee
+
+# Friendslop / co-op fit keywords: phrase -> strength (0..1). Matched case-insensitively
+# against titles, post text, Steam descriptions and tags.
+fit_keywords:
+  "proximity chat": 1.0
+  "proximity voice": 1.0
+  "proximity voice chat": 1.0
+  "friendslop": 1.0
+  "with friends": 0.7
+  "with your friends": 0.7
+  "co-op horror": 0.9
+  "coop horror": 0.9
+  "online co-op": 0.8
+  "co-op": 0.6
+  "coop": 0.5
+  "1-4 players": 0.7
+  "2-4 players": 0.8
+  "up to 4 players": 0.7
+  "4 player": 0.6
+  "multiplayer": 0.4
+  "physics": 0.5
+  "physics-based": 0.6
+  "ragdoll": 0.7
+  "chaotic": 0.6
+  "chaos": 0.5
+  "party game": 0.6
+  "like lethal company": 1.0
+  "lethal company": 0.8
+  "content warning": 0.7
+  "r.e.p.o": 0.8
+  "repo-like": 0.8
+  "peak": 0.3
+  "me and the boys": 0.9
+  "with the boys": 0.8
+  "friends would love": 0.7
+  "streamer": 0.4
+  "funny": 0.3
+  "silly": 0.3
