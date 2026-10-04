@@ -1,5 +1,6 @@
 {
 "current":{},
 "history":[],
-"weights_at_last_note":{}
+"last_weekly_note_at":"2026-10-04T07:21:28.644396Z",
+"weights_at_last_note":{"cross":0.15,"fit":0.15,"fresh":0.1,"hype":0.15,"meme":0.05,"underdog":0.15,"velocity":0.25}
 }

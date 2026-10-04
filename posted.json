@@ -1,7 +1,11 @@
 {
-"games":{},
+"games":{
+"itch:beholdernx/adrorium":{"pending_roundup":false,"roundup_at":"2026-10-04T07:21:28.644396Z","roundup_score":46.1,"would_have_alarmed":false}
+},
 "messages":{
 "1556204278023200789":{"channel_id":"1556204276907249746","entries":[],"kind":"welcome","last_down":0,"last_up":0,"message_id":"1556204278023200789","posted_at":"2026-10-04T07:20:06.904650Z"},
-"1556204279029702662":{"channel_id":"1556204274642452490","entries":[],"kind":"test","last_down":0,"last_up":0,"message_id":"1556204279029702662","posted_at":"2026-10-04T07:20:06.904650Z"}
+"1556204279029702662":{"channel_id":"1556204274642452490","entries":[],"kind":"test","last_down":0,"last_up":0,"message_id":"1556204279029702662","posted_at":"2026-10-04T07:20:06.904650Z"},
+"1556205023128584224":{"channel_id":"1556204275078791300","entries":[],"kind":"roundup_header","last_down":0,"last_up":0,"message_id":"1556205023128584224","posted_at":"2026-10-04T07:21:28.644396Z"},
+"1556205027104784515":{"channel_id":"1556204275078791300","entries":[{"applied_label":0.0,"features":{"cross":0.6,"fit":0.8,"fresh":1.0,"hype":0.0,"meme":0.0,"underdog":0.0,"velocity":0.6039037057083333},"game_id":"itch:beholdernx/adrorium","score":46.1}],"kind":"roundup","last_down":0,"last_up":0,"message_id":"1556205027104784515","posted_at":"2026-10-04T07:21:28.644396Z"}
 }
 }
