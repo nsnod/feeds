@@ -46,6 +46,6 @@ jobs:
             echo "::error::The DISCORD_BOT_TOKEN secret is missing. Add it under Settings -> Secrets and variables -> Actions (README step 2)."
             exit 1
           fi
-          args="--state-dir state"
-          if [ "${FORCE_WELCOME}" = "true" ]; then args="$args --force-welcome"; fi
-          python -m gembot setup $args
+          args=(--state-dir state)
+          if [ "${FORCE_WELCOME}" = "true" ]; then args+=(--force-welcome); fi
+          python -m gembot setup "${args[@]}"

@@ -51,6 +51,6 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           POST_TEST: ${{ inputs.post_test }}
         run: |
-          args="--state-dir state --summary $GITHUB_STEP_SUMMARY"
-          if [ "${POST_TEST}" = "true" ]; then args="$args --post-test"; fi
-          python -m gembot smoke $args
+          args=(--state-dir state --summary "${GITHUB_STEP_SUMMARY}")
+          if [ "${POST_TEST}" = "true" ]; then args+=(--post-test); fi
+          python -m gembot smoke "${args[@]}"

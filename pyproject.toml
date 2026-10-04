@@ -26,6 +26,7 @@ dev = [
   "pytest-cov>=5",
   "ruff>=0.6",
   "actionlint-py>=1.7",
+  "shellcheck-py>=0.10",  # actionlint checks run: scripts with it (GitHub runners have it too)
 ]
 
 [project.scripts]

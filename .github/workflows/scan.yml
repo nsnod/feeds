@@ -54,7 +54,8 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           # newest commit on the default branch, for the 60-day inactivity reminder
-          export GEMBOT_DEFAULT_BRANCH_COMMIT_TS="$(git log -1 --format=%ct)"
+          GEMBOT_DEFAULT_BRANCH_COMMIT_TS="$(git log -1 --format=%ct)"
+          export GEMBOT_DEFAULT_BRANCH_COMMIT_TS
           if [ "${DRY_RUN}" = "true" ]; then
             python -m gembot run --state-dir state --dry-run
           else
