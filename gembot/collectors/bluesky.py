@@ -108,6 +108,7 @@ APP_PASSWORD_SHAPE = "xxxx-xxxx-xxxx-xxxx"
 BSKY_SOCIAL = ".bsky.social"
 ADDED_BSKY_SOCIAL = "added .bsky.social"  # the _clean_handle fix that guesses the domain
 _APP_PASSWORD_RE = re.compile(r"[a-z0-9]{4}(?:-[a-z0-9]{4}){3}")
+_APP_PASSWORD_RUNS = re.compile(r"(?=([a-z0-9]{4}(?:-[a-z0-9]{4}){3}))")  # every (overlapping) run
 _PROFILE_LINK_RE = re.compile(r"(?:https?://)?(?:www\.)?bsky\.app/profile/([^/?#]+)", re.IGNORECASE)
 # atproto handle syntax: dot-separated labels, the last one starting with a letter
 _HANDLE_RE = re.compile(
@@ -306,6 +307,12 @@ def _may_hold_password(identifier: str, fixes: list[str], password: str) -> bool
     password = password.lower()
     typed = identifier.split(".", 1)[0] if ADDED_BSKY_SOCIAL in fixes else identifier
     if _APP_PASSWORD_RE.fullmatch(typed) or (password and password in identifier.lower()):
+        return True
+    # An App Password glued to the handle (an older one, so not equal to the secret): real App
+    # Passwords are random, so nearly all have a digit; four plain words between hyphens
+    # (game-devs-team-blog) are a handle. A rare real handle like team-2026-coop-game is treated
+    # as a password: it then gets the "mixed up" advice instead of a lookup, which leaks nothing.
+    if any(any(ch.isdigit() for ch in run) for run in _APP_PASSWORD_RUNS.findall(identifier.lower())):
         return True
     if ADDED_BSKY_SOCIAL not in fixes and _is_handle(identifier):
         return False  # a full handle; a password with dots is just a wrong password

@@ -1663,3 +1663,27 @@ def test_disabled_bluesky_makes_no_enrichment_requests(mock):
     assert collector.fetch_audience(mention) is None
     assert collector.fetch_audiences([mention]) == 0
     assert len(mock.calls) == 0 and collector.budget.used == 0
+
+
+@pytest.mark.parametrize(
+    "handle",
+    [
+        "wxyz-2345-qrst-6789gamegil",  # an older App Password glued in front of a bare name
+        "gamegil.wxyz-2345-qrst-6789.com",  # ...or inside a custom-domain handle
+        "coop-game-news-feedwxyz-2345-qrst-6789.example.com",  # after password-shaped words
+    ],
+)
+def test_an_old_app_password_glued_to_the_handle_is_never_looked_up(mock, caplog, handle):
+    """BLUESKY_APP_PASSWORD holds a NEW App Password, BLUESKY_HANDLE still has an OLD one stuck
+    to it: it is not equal to the secret, but its shape (with digits) is enough to keep it out
+    of the lookup URL."""
+    caplog.set_level(logging.DEBUG, logger="gembot")
+    state = State()
+    mock.post(CREATE).mock(return_value=err(401, "error_auth.json"))
+    resolve = mock.get(RESOLVE).mock(return_value=resolved())
+
+    _, report = make_collector(env={**ENV, "BLUESKY_HANDLE": handle}, state=state).run()
+
+    assert resolve.call_count == 0
+    assert scratch(state)["login_error"]["handle_check"] == HANDLE_MIXED_UP
+    assert_no_secrets(state, report, caplog, "wxyz-2345-qrst-6789")
