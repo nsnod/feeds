@@ -461,6 +461,9 @@ class SourceHealth(_Model):
     last_error_at: datetime | None = None
     last_error: str | None = None
     alerted_broken: bool = False  # status channel was told it is broken
+    # fingerprint of the config mistakes that alert listed: when they change (feeds.yaml edited but
+    # not fixed yet) the status channel hears what is left right away
+    alerted_mistakes: str | None = None
 
     _utc = field_validator("last_ok_at", "last_error_at", mode="before")(_utc_validator)
 

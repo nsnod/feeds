@@ -316,13 +316,10 @@ def test_source_breaks_after_six_failures_then_recovers_once():
     assert world.state.meta.source_health["itch"].consecutive_failures == 0
 
 
-def test_mistakes_in_feeds_yaml_never_stop_a_run_and_reach_the_status_channel(tmp_path):
-    """The 2026-10-04 feeds.yaml: every other source keeps working, the two valid feeds are read,
-    and after six runs #gembot-status quotes the mistake (it never fixes itself)."""
-    config = load_config(config_dir_with_feeds(tmp_path, INCIDENT_FEEDS), env={})
-    world = World(config)
+def with_online_feeds(requested: list[str]):
+    """``hot_collectors`` plus the real RSS collector; every feed URL it requests answers with an
+    Instagram feed (and is recorded in ``requested``)."""
     instagram = fixture_path("rss", "rssapp_instagram.xml").read_bytes()
-    requested: list[str] = []
 
     def feeds_online(request: httpx.Request) -> httpx.Response:
         requested.append(str(request.url))
@@ -334,6 +331,16 @@ def test_mistakes_in_feeds_yaml_never_stop_a_run_and_reach_the_status_channel(tm
         )
         return {**hot_collectors(ctx), "rss": RssCollector(rss_ctx)}
 
+    return collectors
+
+
+def test_mistakes_in_feeds_yaml_never_stop_a_run_and_reach_the_status_channel(tmp_path):
+    """The 2026-10-04 feeds.yaml: every other source keeps working, the two valid feeds are read,
+    and after six runs #gembot-status lists every mistake (they never fix themselves)."""
+    config = load_config(config_dir_with_feeds(tmp_path, INCIDENT_FEEDS), env={})
+    world = World(config)
+    requested: list[str] = []
+    collectors = with_online_feeds(requested)
     now = NOW
     for run in range(6):
         result = world.run(now, collectors)
@@ -350,10 +357,105 @@ def test_mistakes_in_feeds_yaml_never_stop_a_run_and_reach_the_status_channel(tm
         "https://rss.app/feeds/K1vwmXudAkt1exqO.xml",
     ]
     assert len(result.status_lines) == 1
-    assert "**rss** has failed 6 runs in a row" in result.status_lines[0]
-    assert "config/feeds.yaml: line 38: 'feeds' appears again (first on line 22)" in result.status_lines[0]
+    lines = result.status_lines[0].splitlines()
+    assert lines[0] == "⚠️ **rss** has failed 6 runs in a row. 3 mistakes in your config to fix:"
+    assert lines[1].startswith(
+        '• `config/feeds.yaml: line 28: feed #1 "GameGil (@officialgamegil)": unknown key'
+    )
+    assert lines[2].startswith("• `config/feeds.yaml: line 38: an extra 'feeds:' line with no feed in it;")
+    assert lines[3].startswith(
+        "• `config/feeds.yaml: feed 'KreekCraft (YouTube)': channel_id is 26 characters;"
+    )
+    assert len(lines) == 4 and all(line.endswith("`") for line in lines[1:])
     status = [p for cid, p in world.sent_since_setup() if cid == world.channel("status")]
-    assert len(status) == 1 and "feeds.yaml" in status[0]["embeds"][0]["description"]
+    assert len(status) == 1 and "channel_id is 26 characters" in status[0]["embeds"][0]["description"]
+
+
+def test_the_status_channel_hears_what_is_left_when_feeds_yaml_is_fixed_halfway(tmp_path):
+    """After the alert the user deletes the two stray lines but keeps the "UCUC..." id: the next
+    run says that one mistake is left (once), and fixing it is announced as a recovery."""
+    incident = INCIDENT_FEEDS.read_text(encoding="utf-8")
+    world = World(load_config(config_dir_with_feeds(tmp_path / "a", INCIDENT_FEEDS), env={}))
+    collectors = with_online_feeds([])
+    now = NOW
+    for _ in range(6):
+        result = world.run(now, collectors)
+        now += timedelta(minutes=30)
+    assert len(result.status_lines) == 1 and "3 mistakes" in result.status_lines[0]
+    halfway = "".join(
+        line for n, line in enumerate(incident.splitlines(keepends=True), start=1) if n not in (28, 38)
+    )
+    world.config = load_config(config_dir_with_feeds(tmp_path / "b", halfway), env={})
+    assert world.config.feeds.problems == []
+    result = world.run(now, collectors)
+    assert result.status_lines == [
+        "⚠️ **rss** is still failing. 1 mistake(s) in your config to fix:\n"
+        "• `config/feeds.yaml: feed 'KreekCraft (YouTube)': channel_id is 26 characters; YouTube channel ids "
+        "are 24 and start with UC (was 'UC' pasted twice?) - try channel_id=UCxsk7hqE_CwZWGEJEkGanbA (got "
+        "https://www.youtube.com/feeds/videos.xml?channel_id=UCUCxsk7hqE_CwZWGEJEkGanbA)`"
+    ]
+    for _ in range(3):  # nothing changed: no noise
+        now += timedelta(minutes=30)
+        assert world.run(now, collectors).status_lines == []
+    world.config = load_config(
+        config_dir_with_feeds(tmp_path / "c", halfway.replace("UCUCxsk7", "UCxsk7")), env={}
+    )
+    result = world.run(now + timedelta(minutes=30), collectors)
+    assert result.reports["rss"].ok
+    assert result.status_lines == ["✅ **rss** is working again (after 10 failed runs)."]
+    health = world.state.meta.source_health["rss"]
+    assert (health.alerted_broken, health.alerted_mistakes) == (False, None)
+
+
+def test_a_single_config_mistake_is_the_quoted_error_even_if_another_error_came_later():
+    world = World()
+    mistake = "config/feeds.yaml: line 3, column 11: not valid YAML (found character '`' that cannot start any token)"
+
+    class Mistaken(StubCollector):
+        def collect(self):
+            self.report.errors.append(mistake)
+            self.report.config_problems.append(mistake)
+            with self.guard("listing"):
+                raise HttpError("HTTP 503", 503)  # unrelated, and it never fixes the config
+            return []
+
+    for run in range(6):
+        result = world.run(NOW + timedelta(minutes=30 * run), lambda ctx: {"rss": Mistaken(ctx, name="rss")})
+    assert result.status_lines == [
+        "⚠️ **rss** has failed 6 runs in a row. Last error: `config/feeds.yaml: line 3, column 11: not valid "
+        "YAML (found character ''' that cannot start any token)`"  # a backtick would end the code span
+    ]
+
+
+def test_a_long_list_of_config_mistakes_is_capped_in_the_status_line():
+    world = World()
+
+    class Mistaken(StubCollector):
+        def collect(self):
+            for n in range(1, 12):
+                self.report.errors.append(f"config/feeds.yaml: line {n}: oops")
+                self.report.config_problems.append(f"config/feeds.yaml: line {n}: oops")
+            return []
+
+    for run in range(6):
+        result = world.run(NOW + timedelta(minutes=30 * run), lambda ctx: {"rss": Mistaken(ctx, name="rss")})
+    lines = result.status_lines[0].splitlines()
+    assert lines[0] == "⚠️ **rss** has failed 6 runs in a row. 11 mistakes in your config to fix:"
+    assert lines[1:] == [f"• `config/feeds.yaml: line {n}: oops`" for n in range(1, 9)] + [
+        "…and 3 more (`python -m gembot check-config` lists all)"
+    ]
+
+
+def test_a_status_alert_is_marked_sent_only_once_it_is_posted(tmp_path):
+    world = World(load_config(config_dir_with_feeds(tmp_path, INCIDENT_FEEDS), env={}))
+    collectors = with_online_feeds([])
+    for run in range(7):
+        world.run(NOW + timedelta(minutes=30 * run), collectors, discord=False)  # Discord is down
+    health = world.state.meta.source_health["rss"]
+    assert health.consecutive_failures == 7 and not health.alerted_broken and health.alerted_mistakes is None
+    result = world.run(NOW + timedelta(hours=4), collectors)
+    assert "3 mistakes in your config to fix" in result.status_lines[0]
+    assert health.alerted_broken and health.alerted_mistakes is not None
 
 
 def test_skipped_sources_do_not_count_as_failures():

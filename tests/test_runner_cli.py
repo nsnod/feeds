@@ -251,7 +251,7 @@ def test_render_summary_lists_every_feed_below_the_sources():
         mentions=5,
         ok_units=2,
         errors=["config/feeds.yaml: line 38: 'feeds' appears again (first on line 22)"],
-        config_errors=1,
+        config_problems=["config/feeds.yaml: line 38: 'feeds' appears again (first on line 22)"],
         feed_results=[
             FeedResult(
                 "config/feeds.yaml", "", "config", note="line 38: 'feeds' appears again (first on line 22)"
@@ -280,9 +280,37 @@ def test_render_summary_lists_every_feed_below_the_sources():
     assert text.index("| Source |") < text.index("### Your feeds") < text.index("### Top 10 scored games")
     # no feeds, no table; a config mistake without feed rows quotes the last errors
     other = RunResult(now=NOW)
-    other.reports["x"] = SourceReport("x", errors=["first", "second", "last"], config_errors=1)
+    other.reports["x"] = SourceReport("x", errors=["first", "second", "last"], config_problems=["last"])
     text = render_summary(other, seconds=1.0)
     assert "| x | ❌ config problem | 0 | 0 | second; last |" in text and "### Your feeds" not in text
+
+
+def test_the_readme_explains_every_status_a_smoke_run_shows():
+    """README -> "Read a smoke run" has a row for each status of the sources table, and mentions
+    the "Your feeds" table and each of its statuses."""
+    from gembot.collectors.base import FeedResult, SourceReport
+    from gembot.pipeline import RunResult
+    from gembot.smoke import FEED_STATUS
+
+    result = RunResult(now=NOW)
+    for report in (
+        SourceReport("a", ok_units=1),
+        SourceReport("b", errors=["x"], ok_units=1, failed_units=1),
+        SourceReport("c", errors=["x"], failed_units=1),
+        SourceReport("d", errors=["x"], config_problems=["x"], feed_results=[FeedResult("f", "", "config")]),
+        SourceReport("e", skipped=True, skip_reason="off"),
+    ):
+        result.reports[report.source] = report
+    rows = [line.split(" | ") for line in render_summary(result, seconds=1.0).splitlines()]
+    statuses = [row[1] for row in rows if row[0] in ("| a", "| b", "| c", "| d", "| e")]
+    assert statuses == ["✅ ok", "⚠️ partial", "❌ failed", "❌ config problem", "⏭️ skipped"]
+    readme = (Path(__file__).parents[1] / "README.md").read_text(encoding="utf-8")
+    section = readme.split("### Read a smoke run", 1)[1].split("\n### ", 1)[0]
+    for status in statuses:
+        assert f"| {status} |" in section
+    assert "**Your feeds** table" in section
+    for status in FEED_STATUS:
+        assert status.replace("config", "fix feeds.yaml") in section
 
 
 def test_the_feeds_table_is_capped():
@@ -309,7 +337,7 @@ def test_smoke_with_the_incident_feeds_file_still_reads_every_other_source(tmp_p
     assert '| rss | ❌ config problem | 2 | 0 | 3 mistake(s) to fix, see "Your feeds" below |' in sources
     assert "| KreekCraft (YouTube) | youtube | ❌ fix feeds.yaml |  | channel_id is 26 characters;" in text
     assert (
-        "| config/feeds.yaml |  | ❌ fix feeds.yaml |  | line 38: 'feeds' appears again (first on line 22)"
+        "| config/feeds.yaml |  | ❌ fix feeds.yaml |  | line 38: an extra 'feeds:' line with no feed in it;"
         in text
     )
     assert (
@@ -473,9 +501,14 @@ def test_check_config_reports_problems_and_lists_feeds(tmp_path, capsys):
     (tmp_path / "feeds.yaml").write_text("feeds:\n  - name: A\n    url: https://x/feed\nfeeds: [2]\n")
     assert cli.main(["--config-dir", str(tmp_path), "check-config"]) == 1
     out = capsys.readouterr().out
-    assert "config problem: feeds.yaml: line 4: 'feeds' appears again (first on line 1)" in out
+    assert "config problem: feeds.yaml: line 4: an extra 'feeds:' line with no feed in it" in out
+    assert "(until then the scan keeps reading the 1 feed(s) that work)" in out
     assert "1 problem(s) in" in out and "1 feed(s) loaded:\n  - A [rss]: https://x/feed" in out
     assert "config OK" not in out
+    (tmp_path / "feeds.yaml").write_text("feeds:\n  - name: A\n    url: https://rss.app/feed/abc\n  - 2\n")
+    assert cli.main(["--config-dir", str(tmp_path), "check-config"]) == 1
+    out = capsys.readouterr().out
+    assert "2 problem(s) in" in out and "(until then no feed is read)" in out  # not "keeps reading"
     (tmp_path / "settings.yaml").write_text("run: {}\nrun: {}\n")
     assert cli.main(["--config-dir", str(tmp_path), "check-config"]) == 1
     assert "config problem: settings.yaml: 'run' appears twice (lines 1 and 2)" in capsys.readouterr().out
@@ -490,7 +523,8 @@ def test_check_config_on_the_incident_file_lists_every_mistake_and_fails(tmp_pat
     assert problems[0].startswith('config problem: feeds.yaml: line 28: feed #1 "GameGil (@officialgamegil)"')
     assert "unknown key 'feeds' ignored" in problems[0]
     assert problems[1] == (
-        "config problem: feeds.yaml: line 38: 'feeds' appears again (first on line 22); ignored - remove the extra line"
+        "config problem: feeds.yaml: line 38: an extra 'feeds:' line with no feed in it; ignored - delete line 38 "
+        "and keep the one on line 22"
     )
     assert problems[2].startswith(
         "config problem: feeds.yaml: feed 'KreekCraft (YouTube)': channel_id is 26 characters; YouTube "

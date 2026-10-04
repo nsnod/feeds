@@ -8,6 +8,7 @@ makes the offline replay (``python -m gembot replay``) and the tests possible.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import time
@@ -49,6 +50,7 @@ from gembot.scoring.weights import current_weights
 log = logging.getLogger("gembot.pipeline")
 
 MAX_HISTORY = 48  # snapshots kept per mention (one per run ~= 24h)
+MAX_LISTED_MISTAKES = 8  # config mistakes listed in one status line
 STEAM_REFRESH = timedelta(hours=24)
 # "Still there" timestamps are only moved forward when this old, so a state commit lists what
 # actually changed instead of every listing's clock (measured: ~430 of 500 mentions per run).
@@ -189,17 +191,32 @@ class Pipeline:
                     )
                 health.consecutive_failures = 0
                 health.alerted_broken = False
+                health.alerted_mistakes = None
                 health.last_ok_at = self.now
+                continue
+            mistakes = report.config_problems  # e.g. feeds.yaml: they never fix themselves
+            health.consecutive_failures += 1
+            health.last_error_at = self.now
+            health.last_error = (mistakes or report.errors or ["unknown error"])[-1][:300]
+            fingerprint = _fingerprint(mistakes)
+            if fingerprint is None:
+                health.alerted_mistakes = None  # fixed (or never there): a new mistake is news again
+            if health.consecutive_failures >= threshold and not health.alerted_broken:
+                line = f"⚠️ **{name}** has failed {health.consecutive_failures} runs in a row. "
+                if len(mistakes) > 1:
+                    line += f"{len(mistakes)} mistakes in your config to fix:\n{_listed(mistakes)}"
+                else:
+                    line += f"Last error: `{_inline(health.last_error)}`"
+            elif health.alerted_broken and fingerprint is not None and fingerprint != health.alerted_mistakes:
+                # the config was edited, but not every mistake is fixed: say what is left, right away
+                line = (
+                    f"⚠️ **{name}** is still failing. {len(mistakes)} mistake(s) in your config to fix:\n"
+                    f"{_listed(mistakes)}"
+                )
             else:
-                health.consecutive_failures += 1
-                health.last_error_at = self.now
-                health.last_error = (report.errors[-1] if report.errors else "unknown error")[:300]
-                if health.consecutive_failures >= threshold and not health.alerted_broken:
-                    self._on_status_posted.append(lambda h=health: setattr(h, "alerted_broken", True))
-                    self.result.status_lines.append(
-                        f"⚠️ **{name}** has failed {health.consecutive_failures} runs in a row. "
-                        f"Last error: `{health.last_error}`"
-                    )
+                continue
+            self._on_status_posted.append(lambda h=health, f=fingerprint: _mark_alerted(h, f))
+            self.result.status_lines.append(line)
 
     def check_keepalive(self) -> None:
         """Remind the humans before GitHub's 60-day inactivity rule disables the schedule.
@@ -600,6 +617,33 @@ def _earliest(a: datetime | None, b: datetime | None) -> datetime | None:
     if b is None:
         return a
     return min(a, b)
+
+
+def _fingerprint(mistakes: list[str]) -> str | None:
+    """A short stand-in for a set of config mistakes (kept in state), None when there are none."""
+    if not mistakes:
+        return None
+    return hashlib.sha256("\n".join(sorted(mistakes)).encode("utf-8")).hexdigest()[:16]
+
+
+def _mark_alerted(health: SourceHealth, fingerprint: str | None) -> None:
+    health.alerted_broken = True
+    health.alerted_mistakes = fingerprint
+
+
+def _listed(mistakes: list[str]) -> str:
+    """Config mistakes as a bullet list for #gembot-status (the first few, each clipped)."""
+    lines = [f"• `{_inline(mistake)}`" for mistake in mistakes[:MAX_LISTED_MISTAKES]]
+    if len(mistakes) > MAX_LISTED_MISTAKES:
+        lines.append(
+            f"…and {len(mistakes) - MAX_LISTED_MISTAKES} more (`python -m gembot check-config` lists all)"
+        )
+    return "\n".join(lines)
+
+
+def _inline(text: str) -> str:
+    """Safe inside a Discord `code span`: one line, no backticks, at most 300 characters."""
+    return " ".join(text.replace("`", "'").split())[:300]
 
 
 def _merge_mention(stored: Mention, fresh: Mention) -> Mention:

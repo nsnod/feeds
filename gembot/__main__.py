@@ -181,6 +181,7 @@ def check_config(config_dir: Path | None) -> int:
     feeds = config.feeds.feeds
     problems = [f"feeds.yaml: {problem}" for problem in config.feeds.problems]
     listing: list[str] = []
+    usable = 0
     for feed in feeds:
         state = "" if feed.enabled else " (paused)"
         if feed.enabled:
@@ -191,13 +192,19 @@ def check_config(config_dir: Path | None) -> int:
                 state = " (URL problem, see above)"
             else:
                 state = f" (works, but: {warning})" if warning else ""
+                usable += 1
         listing.append(f"  - {feed.name} [{feed.source}]{state}: {feed.url}")
     for problem in problems:
         print(f"config problem: {problem}")
     if problems:
+        meanwhile = (
+            f"until then the scan keeps reading the {usable} feed(s) that work"
+            if usable
+            else "until then no feed is read"
+        )
         print(
-            f"{len(problems)} problem(s) in {config.config_dir}: fix them in feeds.yaml (until then the "
-            f"scan keeps reading the feeds that work). {len(feeds)} feed(s) loaded:"
+            f"{len(problems)} problem(s) in {config.config_dir}: fix them in feeds.yaml ({meanwhile}). "
+            f"{len(feeds)} feed(s) loaded:"
         )
     else:
         print(f"config OK ({config.config_dir}): {len(feeds)} feed(s)")

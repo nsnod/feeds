@@ -43,7 +43,7 @@ INCIDENT_FEEDS = FIXTURES / "feeds_yaml" / "incident_2026-10-04.yaml"
 def config_dir_with_feeds(tmp_path: Path, feeds_yaml: Path | str) -> Path:
     """A copy of the pinned test config whose feeds.yaml is ``feeds_yaml`` (a file, or its text)."""
     directory = tmp_path / "config"
-    directory.mkdir(exist_ok=True)
+    directory.mkdir(parents=True, exist_ok=True)
     for source in TEST_CONFIG_DIR.glob("*.yaml"):
         (directory / source.name).write_bytes(source.read_bytes())
     text = feeds_yaml.read_text(encoding="utf-8") if isinstance(feeds_yaml, Path) else feeds_yaml

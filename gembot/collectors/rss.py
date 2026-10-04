@@ -74,6 +74,7 @@ _YT_VIDEO_RE = re.compile(
 _YT_CHANNEL_PAGE_RE = re.compile(r"^/channel/([^/]*)")
 _YT_CHANNEL_ID_RE = re.compile(r"UC[A-Za-z0-9_-]{22}")  # fullmatch: "UC" + 22 more, 24 in all
 _YT_ID_CHARS_RE = re.compile(r"[A-Za-z0-9_-]+")
+_PLACEHOLDER_RE = re.compile(r"[xX]{8,}")  # the example feeds in feeds.yaml: rss.app/feeds/XXXX..., UCxxxx...
 _INSTAGRAM_POST_RE = re.compile(r"instagram\.com/(?:[\w.]+/)?(?:p|reels?|tv)/([\w-]+)", re.I)
 _TIKTOK_POST_RE = re.compile(r"tiktok\.com/@([\w.-]+)/(?:video|photo)/(\d+)", re.I)
 _PROFILE_RE = re.compile(
@@ -155,12 +156,11 @@ class RssCollector(Collector):
                 continue
             try:
                 self._collect_one(feed)
-            except BudgetExceeded:
+            except BudgetExceeded as exc:  # out of requests or out of time: say which
+                note = "not requested: " + str(exc).removeprefix(f"{self.budget.name}: ")
                 for later in feeds[index:]:
                     if later.enabled:
-                        self._feed_result(
-                            later, "skipped", note="the request budget for feeds ran out this run"
-                        )
+                        self._feed_result(later, "skipped", note=note)
                     else:
                         self._feed_result(later, "paused", note=PAUSED_NOTE)
                 raise
@@ -180,9 +180,9 @@ class RssCollector(Collector):
         with self.guard(label):
             try:
                 mentions = self.collect_feed(feed)
-            except BadFeedUrl:
+            except BadFeedUrl as exc:  # this URL can never work: feeds.yaml needs fixing
                 bad_url = True
-                self.report.config_errors += 1  # this URL can never work: feeds.yaml needs fixing
+                self.report.config_problems.append(f"config/feeds.yaml: {label}: {exc}")
                 raise
             self.found.extend(mentions)
         new_errors = [_unlabelled(text, label) for text in self.report.errors[errors:]]
@@ -200,13 +200,15 @@ class RssCollector(Collector):
 
     def _report_config_problems(self) -> None:
         """Each mistake found in feeds.yaml is an error (every run, until it is fixed) and a row
-        at the top of the feeds table."""
+        at the top of the feeds table; they come before the bad URLs in ``config_problems``."""
         rows: list[FeedResult] = []
+        texts: list[str] = []
         for problem in self.config.feeds.problems:
-            self.report.errors.append(f"config/feeds.yaml: {problem}")
-            self.report.config_errors += 1
+            texts.append(f"config/feeds.yaml: {problem}")
             self.log.warning("config/feeds.yaml: %s", problem)
             rows.append(FeedResult("config/feeds.yaml", "", "config", note=problem))
+        self.report.errors += texts
+        self.report.config_problems[:0] = texts
         self.report.feed_results[:0] = rows
 
     def _skip_host(self, host: str, names: list[str]) -> None:
@@ -289,9 +291,10 @@ def check_feed_url(url: str) -> tuple[str, str | None]:
     """Return ``(url_to_fetch, warning)``; raise :class:`BadFeedUrl` for URLs that are not feeds.
 
     A YouTube ``/channel/UC...`` page is rewritten to its feed URL (with a warning); RSS.app
-    viewer pages, JSON feeds, YouTube ``@handle`` / ``/c/`` / ``/user/`` pages and a YouTube
-    ``channel_id`` that is not ``UC`` + 22 letters/digits/``_``/``-`` are errors. Offline: this
-    never makes a request (``check-config`` runs it too).
+    viewer pages, JSON feeds, YouTube ``@handle`` / ``/c/`` / ``/user/`` pages, a YouTube
+    ``channel_id`` that is not ``UC`` + 22 letters/digits/``_``/``-`` and the ``XXXX...``
+    placeholders of the example feeds are errors. Offline: this never makes a request
+    (``check-config`` runs it too).
     """
     raw = url.strip()
     try:
@@ -300,6 +303,10 @@ def check_feed_url(url: str) -> tuple[str, str | None]:
         raise BadFeedUrl(f"not a valid URL: {raw!r}") from None
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise BadFeedUrl(f"not an http(s) URL: {raw!r}")
+    if _PLACEHOLDER_RE.search(f"{parts.path}?{parts.query}"):
+        raise BadFeedUrl(
+            f"this is an example URL (the XXXX... part is a placeholder); put your own feed URL here (got {raw})"
+        )
     host = _host(raw)
     path = parts.path
     if host == "rss.app":

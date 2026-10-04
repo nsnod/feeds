@@ -1026,6 +1026,11 @@ def test_long_fields_are_clipped_before_regex_work():
             "channel_id has characters a channel id never contains",
         ),
         ("https://www.youtube.com/feeds/videos.xml", "needs a feeds/videos.xml?channel_id=UC... URL"),
+        (  # the examples at the top of feeds.yaml, uncommented as they are
+            "https://www.youtube.com/feeds/videos.xml?channel_id=UCxxxxxxxxxxxxxxxxxxxxxx",
+            "this is an example URL (the XXXX... part is a placeholder); put your own feed URL here (got",
+        ),
+        ("https://rss.app/feeds/XXXXXXXXXXXXXXXX.xml", "this is an example URL"),
         (
             "https://www.youtube.com/channel/UCUCxsk7hqE_CwZWGEJEkGanbA",
             "channel_id is 26 characters; YouTube channel ids are 24 and start with UC (was 'UC' pasted twice?)",
@@ -1060,7 +1065,7 @@ def test_feeds_yaml_problems_are_errors_while_the_valid_feeds_are_still_collecte
     problem = "line 9: 'feeds' appears again (first on line 2); ignored - remove the extra line"
     mentions, report = collector_for(Feeds(feeds=[IG], problems=[problem])).run()
     assert len(mentions) == 3 and report.ok_units == 1 and report.mentions == 3
-    assert report.errors == [f"config/feeds.yaml: {problem}"]
+    assert report.errors == report.config_problems == [f"config/feeds.yaml: {problem}"]
     assert report.config_errors == 1 and not report.ok  # until fixed: the status channel hears of it
     assert report.summary() == "rss: FAILED, 3 mentions, 1 requests; 1 error(s)"
     assert report.feed_results == [
@@ -1132,6 +1137,9 @@ def test_every_feed_gets_a_result_row():
     assert "HTTP 404" in notes["Gone blog"]
     assert notes["Half a feed"].startswith("malformed feed, kept what could be read")
     assert report.config_errors == 1 and not report.ok  # the bad channel id never fixes itself
+    assert report.config_problems[0].startswith(
+        "config/feeds.yaml: feed 'Typo': channel_id is 26 characters; YouTube channel ids are 24"
+    )
 
 
 @respx.mock
@@ -1148,7 +1156,17 @@ def test_feeds_left_when_the_budget_runs_out_are_listed_as_skipped():
         ("Co-op Corner", "paused"),
         ("Other blog", "skipped"),
     ]
-    assert report.feed_results[1].note == "the request budget for feeds ran out this run"
+    assert report.feed_results[1].note == "not requested: request budget of 1 used up for this run"
+
+
+def test_feeds_left_when_the_run_is_out_of_time_say_so():
+    budget = Budget("rss", 50)
+    budget.deadline = time.monotonic() - 1  # the collect stage's time is up
+    _, report = collector_for(Feeds(feeds=[IG, TT]), budget=budget).run()
+    assert "out of time" in report.warnings[0] and report.requests == 0
+    assert [(row.status, row.note) for row in report.feed_results] == [
+        ("skipped", "not requested: out of time for this run (other steps still need the time)")
+    ] * 2  # not "the request budget ran out": raising it would not help
 
 
 @respx.mock

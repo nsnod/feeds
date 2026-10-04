@@ -54,8 +54,13 @@ class SourceReport:
     skip_reason: str | None = None
     ok_units: int = 0  # units of work (feeds, subreddits, searches) that succeeded
     failed_units: int = 0
-    config_errors: int = 0  # how many of ``errors`` are mistakes in the user's config/ files
+    # the ``errors`` that are mistakes in the user's config/ files (the status alert lists them)
+    config_problems: list[str] = field(default_factory=list)
     feed_results: list[FeedResult] = field(default_factory=list)  # RSS only: one row per feed
+
+    @property
+    def config_errors(self) -> int:
+        return len(self.config_problems)
 
     @property
     def ok(self) -> bool:
