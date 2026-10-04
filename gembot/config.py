@@ -230,6 +230,10 @@ class SteamSource(_Cfg):
     early_access_genre_id: int = 70
     max_new_apps_per_run: int = 25
     track_followers: bool = False
+    page_size: int = 50  # search/results "count" (rows per page)
+    exclude_tags: list[int] = Field(default_factory=lambda: [128])  # search "untags" (128 = MMO)
+    request_interval_s: float = 2.0  # pause between Steam requests (~200 req / 5 min per IP)
+    appdetails_refresh_hours: float = 24.0  # reuse stored appdetails younger than this
 
 
 class RedditSource(_Cfg):
