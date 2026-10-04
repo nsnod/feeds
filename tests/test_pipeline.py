@@ -619,3 +619,30 @@ def test_sources_stop_at_the_collect_deadline_and_enrichment_gets_its_own():
     assert report.mentions == 0 and any("out of time" in w for w in report.warnings)
     # after collecting, the collector's budget runs on the (later) enrichment deadline
     assert seen["c"].budget.deadline - time.monotonic() > 3000
+
+
+def test_still_there_timestamps_move_only_when_due_so_state_diffs_stay_small():
+    from gembot.pipeline import LAST_SEEN_REFRESH, OBSERVED_REFRESH
+    from gembot.scoring.features import ITCH_STALE_HOURS
+
+    # a listing seen every run must never look like it fell off the list
+    assert OBSERVED_REFRESH + timedelta(minutes=30) < timedelta(hours=ITCH_STALE_HOURS)
+    world = World()
+    post = make_mention("reddit", "ts1", title="Moon Soup Simulator co-op", hours_ago=2, likes=5)
+    factory = lambda ctx: {"reddit": StubCollector(ctx, [post])}  # noqa: E731
+    world.run(NOW, factory)
+    mention = world.state.mentions["reddit:ts1"]
+    game = world.state.games[mention.game_id]
+    assert mention.observed_at == NOW and game.last_seen == NOW
+
+    world.run(NOW + timedelta(minutes=30), factory)  # unchanged, re-observed soon after
+    assert world.state.mentions["reddit:ts1"].observed_at == NOW and game.last_seen == NOW
+
+    later = NOW + OBSERVED_REFRESH
+    world.run(later, factory)
+    assert world.state.mentions["reddit:ts1"].observed_at == later
+    assert game.last_seen == NOW
+
+    latest = NOW + LAST_SEEN_REFRESH
+    world.run(latest, factory)
+    assert world.state.games[mention.game_id].last_seen == latest

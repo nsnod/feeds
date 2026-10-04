@@ -50,6 +50,12 @@ log = logging.getLogger("gembot.pipeline")
 
 MAX_HISTORY = 48  # snapshots kept per mention (one per run ~= 24h)
 STEAM_REFRESH = timedelta(hours=24)
+# "Still there" timestamps are only moved forward when this old, so a state commit lists what
+# actually changed instead of every listing's clock (measured: ~430 of 500 mentions per run).
+# observed_at feeds the 6-hour "fell off the list" check (features.ITCH_STALE_HOURS) and
+# last_seen the 30-day pruning, so neither needs more precision than this.
+OBSERVED_REFRESH = timedelta(hours=2)
+LAST_SEEN_REFRESH = timedelta(hours=12)
 
 
 @dataclass
@@ -247,13 +253,14 @@ class Pipeline:
             if key not in state.seen:
                 state.seen[key] = merged.first_seen or self.now
             merged.first_seen = merged.first_seen or state.seen[key]
-            merged.observed_at = self.now
+            if merged.observed_at is None or self.now - merged.observed_at >= OBSERVED_REFRESH:
+                merged.observed_at = self.now
             changed = is_new or _numbers_changed(stored, merged)
             _append_snapshot(merged, self.now)
             state.mentions[key] = merged
             self._record_baseline(merged)
             game = state.games.get(merged.game_id) if merged.game_id else None
-            if game is not None:
+            if game is not None and self.now - game.last_seen >= LAST_SEEN_REFRESH:
                 game.last_seen = self.now  # still listed/posted: not stale, even if nothing changed
             if changed or game is None:
                 touched.append(key)
@@ -599,6 +606,7 @@ def _merge_mention(stored: Mention, fresh: Mention) -> Mention:
     """Fresh numbers/text win; identity, history and enrichment results are kept."""
     merged = fresh.model_copy(deep=True)
     merged.first_seen = stored.first_seen or fresh.first_seen
+    merged.observed_at = stored.observed_at  # moved forward by ingest when due
     merged.game_id = stored.game_id
     merged.history = list(stored.history)
     merged.comments_fetched_at = stored.comments_fetched_at
