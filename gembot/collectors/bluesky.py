@@ -253,7 +253,7 @@ def _parse_dt(value: Any) -> datetime | None:
         return None
     try:
         return ensure_utc(datetime.fromisoformat(value))
-    except ValueError:
+    except (ValueError, OverflowError):  # e.g. "9999-12-31T23:59:59-12:00" is past datetime.max in UTC
         return None
 
 
@@ -312,7 +312,8 @@ def _text_urls(text: str) -> list[str]:
     urls = []
     for match in _URL_RE.finditer(text):
         raw = match.group(0)
-        if raw.endswith(("...", "…")):  # a shortened display link; the link facet has the real URL
+        core = raw.rstrip(")]}'\",;:!?")
+        if core.endswith(("...", "…")):  # a shortened display link; the link facet has the real URL
             continue
         url = raw.rstrip(_URL_TRAILING)
         if len(url) > len("https://"):
@@ -385,6 +386,12 @@ def _title(text: str) -> str:
     return (cut[:space] if space >= TITLE_MAX // 2 else cut).rstrip()
 
 
+def _author_name(author: dict[str, Any], did: str) -> str:
+    """The handle, or the DID when the handle is missing or unverified (``handle.invalid``)."""
+    handle = author.get("handle")
+    return handle if isinstance(handle, str) and handle and handle != "handle.invalid" else did
+
+
 def parse_post(post: Any, *, now: datetime, max_age_hours: float, term: str | None = None) -> Mention | None:
     """``app.bsky.feed.defs#postView`` -> :class:`Mention`, or ``None`` when the post is skipped.
 
@@ -409,14 +416,13 @@ def parse_post(post: Any, *, now: datetime, max_age_hours: float, term: str | No
         return None
     text = str(record.get("text") or "")
     view = post.get("embed")
-    handle = author.get("handle")
     return Mention(
         source="bluesky",
         source_id=f"{did}/{rkey}",
         url=post_url(did, rkey),
         title=_title(text),
         text=text,
-        author=handle if isinstance(handle, str) and handle and handle != "handle.invalid" else did,
+        author=_author_name(author, did),
         author_audience=None,
         created_at=created_at,
         engagement=Engagement(
@@ -447,7 +453,7 @@ def _reply_to_comment(item: Any) -> Comment | None:
     record = _dict(post.get("record"))
     return Comment(
         id=parsed[1],
-        author=str(author.get("handle") or parsed[0]),
+        author=_author_name(author, parsed[0]),
         text=str(record.get("text") or ""),
         score=_count(post.get("likeCount")),
         created_at=_parse_dt(record.get("createdAt")),
@@ -523,7 +529,7 @@ class BlueskyCollector(Collector):
     def fetch_comments(self, mention: Mention, limit: int) -> list[Comment]:
         """Direct replies (logged out, no token), most liked first."""
         uri = _mention_uri(mention)
-        if uri is None or limit <= 0:
+        if not self.bsky.enabled or uri is None or limit <= 0:
             return []
         url = self._public() + GET_POST_THREAD
         reply = self._xrpc("GET", url, params={"uri": uri, "depth": 1, "parentHeight": 0}, expect=(200, 400))
@@ -532,14 +538,22 @@ class BlueskyCollector(Collector):
                 return []
             raise XrpcError(f"getPostThread: {reply.describe()}", reply.status, url, reply.error)
         thread = _dict(reply.data.get("thread"))
-        comments = [c for c in map(_reply_to_comment, _list(thread.get("replies"))) if c is not None]
+        comments: list[Comment] = []
+        for item in _list(thread.get("replies")):
+            try:
+                comment = _reply_to_comment(item)
+            except (ValueError, OverflowError, TypeError) as exc:  # one odd reply must not lose the thread
+                self.log.debug("skipping malformed reply: %s", exc)
+                continue
+            if comment is not None:
+                comments.append(comment)
         comments.sort(key=lambda c: c.score, reverse=True)
         return comments[:limit]
 
     def fetch_audience(self, mention: Mention) -> int | None:
         """The author's follower count (logged out, no token)."""
         did = _mention_did(mention)
-        if did is None:
+        if not self.bsky.enabled or did is None:
             return None
         reply = self._xrpc("GET", self._public() + GET_PROFILE, params={"actor": did}, expect=(200,))
         return _followers(reply.data)
@@ -549,6 +563,8 @@ class BlueskyCollector(Collector):
 
         Returns how many mentions got a follower count. Never raises: failures become warnings.
         """
+        if not self.bsky.enabled:
+            return 0
         by_did: dict[str, list[Mention]] = {}
         for mention in mentions:
             did = _mention_did(mention) if mention.source == "bluesky" else None
@@ -840,7 +856,7 @@ class BlueskyCollector(Collector):
     def _take(self, post: Any, term: str) -> None:
         try:
             mention = parse_post(post, now=self.now, max_age_hours=self.bsky.max_post_age_hours, term=term)
-        except ValueError as exc:  # pydantic validation of an odd post: skip just that post
+        except (ValueError, OverflowError, TypeError) as exc:  # an odd post: skip just that post
             self.log.debug("skipping malformed post: %s", exc)
             return
         if mention is None or mention.extra["uri"] in self._seen_uris:

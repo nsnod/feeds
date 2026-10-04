@@ -31,7 +31,7 @@
             "images": [
               {
                 "source": {
-                  "url": "https://preview.redd.it/bellhop-gif.gif?width=640&amp;format=png&amp;auto=webp&amp;s=9f8e7d",
+                  "url": "https://preview.redd.it/bellhop-gif.gif?width=640&format=png&auto=webp&s=9f8e7d",
                   "width": 640,
                   "height": 360
                 },
@@ -213,7 +213,7 @@
             "images": [
               {
                 "source": {
-                  "url": "https://external-preview.redd.it/fox.png?width=1280&amp;format=png&amp;auto=webp&amp;s=0f1e2d",
+                  "url": "https://external-preview.redd.it/fox.png?width=1280&format=png&auto=webp&s=0f1e2d",
                   "width": 1280,
                   "height": 720
                 },

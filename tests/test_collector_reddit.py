@@ -614,6 +614,17 @@ def test_safe_fetch_comments_turns_errors_into_warnings():
     assert collector.report.requests == 2
 
 
+@respx.mock
+def test_token_429_stops_reddit_for_the_run():
+    token = token_route(httpx.Response(429, headers={"Retry-After": "600"}))
+    comments = respx.get(f"https://{OAUTH}/comments/abc").mock(return_value=ok_json("comments.json"))
+    collector = oauth_collector()
+    mentions, report = collector.run()
+    assert collector.safe_fetch_comments(make_mention("reddit", "abc"), 10) == []
+    assert mentions == [] and token.call_count == 1 and comments.call_count == 0
+    assert any("429" in w and "no more Reddit requests this run" in w for w in report.warnings)
+
+
 # ---------------------------------------------------------------- anonymous RSS
 
 
@@ -724,6 +735,10 @@ def test_rss_ip_block_is_reported_as_block():
             "malformed RSS",
         ),
         (httpx.Response(500, text="oops"), "HTTP 500"),
+        (  # not followed: the search page would be a 2nd RSS request this minute
+            httpx.Response(302, headers={"location": "https://www.reddit.com/subreddits/search.rss?q=x"}),
+            "redirected to search (a subreddit in sources.yaml may be private",
+        ),
     ],
 )
 def test_rss_errors_are_recorded(response, needle):

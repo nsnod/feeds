@@ -171,8 +171,7 @@ class RedditCollector(Collector):
                 self.report.warnings.append("reddit: every configured subreddit is unavailable right now")
                 break
             with self.guard(f"reddit/{listing}"):
-                posts = self._oauth_listing(subs, listing)
-                self._add_posts(posts, listing)
+                posts = self._oauth_listing(subs, listing)  # already added to self.found page by page
                 if listing == "new":
                     self._remember_newest(posts)
 
@@ -203,15 +202,19 @@ class RedditCollector(Collector):
         if self._token:
             return self._token
         secrets = self.config.secrets
-        response = self.http.post(
-            TOKEN_URL,
-            budget=self.budget,
-            data={"grant_type": "client_credentials"},
-            auth=(secrets.reddit_client_id or "", secrets.reddit_client_secret or ""),
-            headers={"User-Agent": self.user_agent},
-            expect=(200, 401, 403),
-            retries=1,
-        )
+        try:
+            response = self.http.post(
+                TOKEN_URL,
+                budget=self.budget,
+                data={"grant_type": "client_credentials"},
+                auth=(secrets.reddit_client_id or "", secrets.reddit_client_secret or ""),
+                headers={"User-Agent": self.user_agent},
+                expect=(200, 401, 403),
+                retries=1,
+            )
+        except RateLimited as exc:
+            self._stop_rate_limited(exc)
+            raise
         status = response.status_code
         if status == 401:
             self._auth_error = HttpError(f"{BAD_CREDENTIALS} (HTTP 401)", 401, TOKEN_URL)
@@ -270,14 +273,24 @@ class RedditCollector(Collector):
 
     def _api_send(self, url: str, params: dict[str, Any]) -> httpx.Response:
         token = self._ensure_token()
-        return self.http.get(
-            url,
-            budget=self.budget,
-            params=params,
-            headers={"Authorization": f"bearer {token}", "User-Agent": self.user_agent},
-            follow_redirects=False,
-            expect=(200, 401, 403, 404, *_REDIRECTS),
-        )
+        try:
+            return self.http.get(
+                url,
+                budget=self.budget,
+                params=params,
+                headers={"Authorization": f"bearer {token}", "User-Agent": self.user_agent},
+                follow_redirects=False,
+                expect=(200, 401, 403, 404, *_REDIRECTS),
+            )
+        except RateLimited as exc:
+            self._stop_rate_limited(exc)
+            raise
+
+    def _stop_rate_limited(self, exc: RateLimited) -> None:
+        """A 429 the HTTP layer would not wait out: more requests now only prolong the limit."""
+        self._stop_reason = f"{exc}; no more Reddit requests this run"
+        self.report.warnings.append(self._stop_reason)
+        self.log.warning(self._stop_reason)
 
     def _note_rate_limit(self, response: httpx.Response) -> None:
         raw = response.headers.get("x-ratelimit-remaining")
@@ -299,7 +312,10 @@ class RedditCollector(Collector):
         self.log.warning(self._stop_reason)
 
     def _oauth_listing(self, subs: list[str], listing: str) -> list[dict[str, Any]]:
-        """One multireddit listing; if a subreddit in it is unavailable, check them one by one."""
+        """One multireddit listing; if a subreddit in it is unavailable, check them one by one.
+
+        Posts are added to ``self.found`` as each page arrives, so a failure or a budget stop on
+        a later page or probe keeps what earlier ones returned. Returns every post fetched."""
         try:
             return self._oauth_pages(subs, listing)
         except SubredditUnavailable as exc:
@@ -341,6 +357,7 @@ class RedditCollector(Collector):
                 params["after"] = after
             children, after = _listing_children(self._api_get(url, params))
             page_posts = _t3_data(children)
+            self._add_posts(page_posts, listing)  # kept even if a later page or probe fails
             posts.extend(page_posts)
             # Only follow `after` while a full page is still all newer than what we saw last run.
             times = [_float(p.get("created_utc")) for p in page_posts if not p.get("stickied")]
@@ -425,8 +442,10 @@ class RedditCollector(Collector):
                 budget=self.budget,
                 params={"limit": max(1, min(self.cfg.rss_limit, MAX_LISTING_LIMIT))},
                 headers=self._anon_headers(),
+                # A missing subreddit redirects to search: following it would be a 2nd RSS request.
+                follow_redirects=False,
                 retries=1,  # one retry on 429 (Retry-After, bounded); RSS allows ~1 request/min per IP
-                expect=(200, 403, 404),
+                expect=(200, 403, 404, *_REDIRECTS),
             )
         except RateLimited as exc:
             self.report.failed_units += 1
@@ -440,13 +459,15 @@ class RedditCollector(Collector):
             self.log.warning("reddit RSS: %s", exc)
             return
         with self.guard("reddit RSS"):
-            if response.status_code != 200 or _looks_like_html(response):
+            status = response.status_code
+            if status != 200 or _looks_like_html(response):
                 if _is_block_page(response):
-                    raise RedditBlocked(IP_BLOCKED, response.status_code, url)
+                    raise RedditBlocked(IP_BLOCKED, status, url)
+                problem = "Reddit redirected to search" if status in _REDIRECTS else "not an RSS feed"
                 raise HttpError(
-                    f"{_path(url)}: HTTP {response.status_code}, not an RSS feed "
+                    f"{_path(url)}: HTTP {status}, {problem} "
                     "(a subreddit in sources.yaml may be private, banned or misspelled)",
-                    response.status_code,
+                    status,
                     url,
                 )
             self._add_rss(response.content)
@@ -566,11 +587,11 @@ class RedditCollector(Collector):
         permalink = str(data.get("permalink") or "")
         url = WWW + permalink if permalink.startswith("/") else (permalink or f"{WWW}/comments/{post_id}/")
         sub = str(data.get("subreddit") or "") or _subreddit_from_permalink(url)
-        selftext = html.unescape(str(data.get("selftext") or ""))
+        selftext = str(data.get("selftext") or "")  # raw_json=1: already unescaped
         is_self = bool(data.get("is_self"))
         candidates: list[str] = []
         if not is_self and data.get("url"):
-            candidates.append(html.unescape(str(data["url"])))
+            candidates.append(str(data["url"]))
         candidates += _text_urls(selftext)
         author = data.get("author")
         subscribers = data.get("subreddit_subscribers")
@@ -581,7 +602,7 @@ class RedditCollector(Collector):
             source="reddit",
             source_id=post_id,
             url=url,
-            title=html.unescape(str(data.get("title") or "")),
+            title=str(data.get("title") or ""),
             text=selftext,
             author=str(author) if author and author != "[deleted]" else None,
             author_audience=audience,
@@ -606,8 +627,9 @@ class RedditCollector(Collector):
     # ------------------------------------------------------------------ comments
     def fetch_comments(self, mention: Mention, limit: int) -> list[Comment]:
         """Top-level comments, best first. OAuth only: anonymous comment JSON is blocked and
-        RSS comment feeds are flat and would spend the ~1 request/min RSS allowance."""
-        if mention.source != "reddit" or self.mode != MODE_OAUTH:
+        RSS comment feeds are flat and would spend the ~1 request/min RSS allowance. Nothing is
+        requested when Reddit is disabled in sources.yaml (older mentions in state still ask)."""
+        if mention.source != "reddit" or not self.cfg.enabled or self.mode != MODE_OAUTH:
             return []
         if self._stop_reason or self._auth_error is not None or limit <= 0:
             return []
@@ -634,7 +656,7 @@ def parse_comments(payload: Any, limit: int) -> list[Comment]:
             continue
         data = child.get("data") or {}
         author = str(data.get("author") or "")
-        body = html.unescape(str(data.get("body") or "")).strip()
+        body = str(data.get("body") or "").strip()  # raw_json=1: already unescaped
         if not body or body in _DELETED:
             continue
         is_bot = author == "AutoModerator" or (
@@ -677,9 +699,9 @@ def _thumbnail(data: dict[str, Any]) -> str | None:
     if images and isinstance(images[0], dict):
         source = (images[0].get("source") or {}).get("url")
         if source:
-            return html.unescape(str(source))
+            return str(source)
     thumb = str(data.get("thumbnail") or "")
-    return html.unescape(thumb) if thumb.startswith(("http://", "https://")) else None
+    return thumb if thumb.startswith(("http://", "https://")) else None
 
 
 def _text_urls(text: str) -> list[str]:
