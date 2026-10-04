@@ -1,0 +1,11 @@
+{
+  "errors": [
+    {
+      "parameters": {"query": ["(proximity chat and friendslop"]},
+      "message": "There were errors processing your request: Ambiguous use of and as a keyword. Use a space to logically join two clauses, or \"AND\" to treat as a keyword. (at position 17), Missing closing parenthesis (at position 30)"
+    }
+  ],
+  "title": "Invalid Request",
+  "detail": "One or more parameters to your request was invalid.",
+  "type": "https://api.x.com/2/problems/invalid-request"
+}

@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -259,7 +259,12 @@ class BlueskySource(_Cfg):
 class XSource(_Cfg):
     enabled: bool = True  # still requires X_BEARER_TOKEN
     queries: list[str] = Field(default_factory=list)
-    max_results: int = 25
+    max_results: int = 25  # posts per query per run; X allows 10..100 and bills every post returned
+    sort_order: Literal["recency", "relevancy"] = "recency"
+    # expansions=author_id adds @usernames + follower counts, but every returned user is billed too
+    expand_authors: bool = False
+    # posts + expanded users returned per calendar month (UTC) before the collector pauses; None = no cap
+    monthly_read_budget: int | None = 3000
     api_base: str = "https://api.x.com/2"
 
 

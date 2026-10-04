@@ -78,10 +78,13 @@ bluesky:
   max_post_age_hours: 72
 
 x:
-  enabled: true          # only runs when the X_BEARER_TOKEN secret is set (paid API)
-  queries:
+  enabled: true          # only runs when the X_BEARER_TOKEN secret is set (paid API, ~$0.005 per post read)
+  queries:               # each query: max 512 characters, X search syntax (uppercase OR)
     - '("proximity chat" OR friendslop OR "co-op horror") (game OR steam OR wishlist) -is:retweet lang:en'
-  max_results: 25
+  max_results: 25        # posts per query per run (10-100); every post returned is billed
+  sort_order: recency    # recency | relevancy
+  expand_authors: false  # true adds @usernames + follower counts, but each user returned costs ~$0.010
+  monthly_read_budget: 3000  # pause X for the rest of the month after this many posts+users (~$15)
   api_base: "https://api.x.com/2"
 
 resolver:
