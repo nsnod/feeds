@@ -19,8 +19,8 @@ issues; see docs/VERIFICATION.md):
   one, GemBot asks the public AppView (``resolveHandle``, no token) whether the handle exists,
   once per set of credentials (again with the daily login retry only if the check itself
   failed), so the error can say which secret to fix. A handle that may hold a password (an
-  App Password pasted into it, or the two secrets swapped) is never looked up: the lookup is a
-  GET, so the value would end up in a URL.
+  App Password pasted into it, the two secrets swapped, or extra text after ``.bsky.social``)
+  is never looked up: the lookup is a GET, so the value would end up in a URL.
 * Without credentials we try public search at most once every ``unauth_probe_hours``
   and otherwise skip quietly (a skip is not a failure).
 * Replies (``getPostThread``) and follower counts (``getProfile(s)``) work logged out on
@@ -99,9 +99,13 @@ HANDLE_MISSING = "missing"  # no such handle on Bluesky (or not even handle synt
 HANDLE_UNKNOWN = "unknown"  # the check itself failed (5xx, network, odd answer)
 HANDLE_SKIPPED = "skipped"  # an email address or a DID: nothing to look up
 HANDLE_MIXED_UP = "mixed_up"  # BLUESKY_HANDLE seems to hold a password: never looked up
+HANDLE_EXTRA_TEXT = "extra_text"  # text after .bsky.social (often a pasted password): never looked up
+# Answers only a resolveHandle request can give. The others are worked out again on every run.
+LOOKUP_ANSWERS = frozenset({HANDLE_FOUND, HANDLE_MISSING, HANDLE_UNKNOWN})
 
 APP_PASSWORDS = "Settings -> Privacy and security -> App passwords"
 APP_PASSWORD_SHAPE = "xxxx-xxxx-xxxx-xxxx"
+BSKY_SOCIAL = ".bsky.social"
 ADDED_BSKY_SOCIAL = "added .bsky.social"  # the _clean_handle fix that guesses the domain
 _APP_PASSWORD_RE = re.compile(r"[a-z0-9]{4}(?:-[a-z0-9]{4}){3}")
 _PROFILE_LINK_RE = re.compile(r"(?:https?://)?(?:www\.)?bsky\.app/profile/([^/?#]+)", re.IGNORECASE)
@@ -137,7 +141,13 @@ class LoginError(RuntimeError):
 
 
 class LoginLimitReached(LoginError):
-    """``max_sessions_per_day`` new logins happened in the last 24 hours."""
+    """``max_sessions_per_day`` new logins happened in the last 24 hours. ``retry_at``: when
+    enough of them have left the window to allow the next one (``None`` when the cap allows no
+    logins at all)."""
+
+    def __init__(self, message: str, retry_at: datetime | None = None):
+        super().__init__(message)
+        self.retry_at = retry_at
 
 
 @dataclass(frozen=True)
@@ -273,18 +283,29 @@ def _clean_handle(raw: str) -> tuple[str, list[str]]:
         value = value.lower()
         fixes.append("made it lowercase")
     if "." not in value:
-        value += ".bsky.social"
+        value += BSKY_SOCIAL
         fixes.append(ADDED_BSKY_SOCIAL)
     return value, fixes
 
 
+def _has_extra_text(identifier: str) -> bool:
+    """Something follows ``.bsky.social`` (e.g. a password pasted after the handle; the spaces
+    in between are gone by now). Such a value must never go into a lookup URL."""
+    return BSKY_SOCIAL in identifier and not identifier.endswith(BSKY_SOCIAL)
+
+
 def _may_hold_password(identifier: str, fixes: list[str], password: str) -> bool:
     """BLUESKY_HANDLE (cleaned up into ``identifier`` by ``fixes``) seems to hold a password: an
-    App Password pasted into it (alone or after the handle), the value of BLUESKY_APP_PASSWORD,
-    or the two secrets swapped (BLUESKY_HANDLE is no full handle, BLUESKY_APP_PASSWORD is one).
-    Such a value must never go into a lookup URL."""
+    App Password as the whole value typed, the value of BLUESKY_APP_PASSWORD anywhere in it, or
+    the two secrets swapped (BLUESKY_HANDLE is no full handle, BLUESKY_APP_PASSWORD is one).
+    Such a value must never go into a lookup URL.
+
+    A full handle whose first label happens to have the App Password shape
+    (``game-devs-team-blog.bsky.social``) is a handle: only a bare value (GemBot added
+    ``.bsky.social``) is held against the shape."""
     password = password.lower()
-    if _APP_PASSWORD_RE.search(identifier) or (password and password in identifier.lower()):
+    typed = identifier.split(".", 1)[0] if ADDED_BSKY_SOCIAL in fixes else identifier
+    if _APP_PASSWORD_RE.fullmatch(typed) or (password and password in identifier.lower()):
         return True
     if ADDED_BSKY_SOCIAL not in fixes and _is_handle(identifier):
         return False  # a full handle; a password with dots is just a wrong password
@@ -758,8 +779,10 @@ class BlueskyCollector(Collector):
             self.report.warnings.append(str(exc))
             self.log.warning("%s", exc)
             last = _dict(self.scratch().get("login_error"))
-            if last.get("message"):
+            if last.get("message") and last.get("fp") == self._session_box().fingerprint:
                 self._fail(f"login: {last['message']}")
+            elif last.get("message"):  # the last error was about other secrets: these were never tried
+                self._fail(f"login: {_untried_message(exc.retry_at)}")
         except (LoginError, HttpError) as exc:
             self._fail(f"login: {exc}")
         return None
@@ -813,8 +836,12 @@ class BlueskyCollector(Collector):
             )
         recent = [s for s in _list(scratch.get("created")) if (t := _parse_dt(s)) and now - t < LOGIN_WINDOW]
         scratch["created"] = recent
-        if len(recent) >= self.bsky.max_sessions_per_day:
-            raise LoginLimitReached(LOGIN_LIMIT_WARNING)
+        cap = self.bsky.max_sessions_per_day
+        if len(recent) >= cap:
+            times = sorted(t for s in recent if (t := _parse_dt(s)))
+            # a login is allowed again once all but cap - 1 of them have left the window
+            retry_at = times[len(times) - cap] + LOGIN_WINDOW if cap > 0 else None
+            raise LoginLimitReached(LOGIN_LIMIT_WARNING, retry_at)
         if self.budget.exhausted:
             raise BudgetExceeded(
                 f"{self.budget.name}: request budget of {self.budget.limit} used up for this run"
@@ -864,25 +891,38 @@ class BlueskyCollector(Collector):
         """Write the message for a 401 into ``entry`` (the ``login_error`` scratch): "wrong handle"
         or "wrong App Password" when the handle check can tell, the general advice otherwise.
 
-        The handle is checked at most once per set of credentials: the answer is kept in
-        ``entry["handle_check"]`` next to the credential fingerprint. Only a failed check
+        The handle is looked up at most once per set of credentials: the answer is kept in
+        ``entry["handle_check"]`` next to the credential fingerprint. Only a failed lookup
         (``HANDLE_UNKNOWN``) is repeated, with the next login attempt (at most once a day).
+        Answers that need no request are worked out again every time, so an answer stored by
+        an older, cruder rule (a real handle taken for a password) does not stick.
         """
-        check = entry.get("handle_check") or self._check_handle()
+        check = self._handle_verdict()
+        if check is None:
+            kept = entry.get("handle_check")
+            check = kept if kept in LOOKUP_ANSWERS else self._check_handle()
         if check is not None:  # None: no request budget left, look it up on a later run
             entry["handle_check"] = check
         entry.update(rejected=True, message=self._rejected_message(check or HANDLE_UNKNOWN))
 
-    def _check_handle(self) -> str | None:
-        """Does BLUESKY_HANDLE exist? One request to the public AppView: no token, no retry, and
-        not a login attempt. ``None`` when the run's request budget is used up."""
+    def _handle_verdict(self) -> str | None:
+        """The handle check's answer when no request is needed; ``None``: look the handle up."""
         identifier = self._identifier()
         if not identifier or _is_email(identifier) or _is_did(identifier):
             return HANDLE_SKIPPED
+        if _has_extra_text(identifier):
+            return HANDLE_EXTRA_TEXT  # never put a password into a URL
         if _may_hold_password(identifier, self._handle_fixes, self.config.secrets.bluesky_app_password or ""):
             return HANDLE_MIXED_UP  # never put a password into a URL
         if not _is_handle(identifier):
             return HANDLE_MISSING  # not even handle syntax: no account can have it
+        return None
+
+    def _check_handle(self) -> str | None:
+        """Does BLUESKY_HANDLE exist? One request to the public AppView: no token, no retry, and
+        not a login attempt. Only for a handle :meth:`_handle_verdict` has no answer for.
+        ``None`` when the run's request budget is used up."""
+        identifier = self._identifier()
         try:
             reply = self._xrpc(
                 "GET",
@@ -1136,21 +1176,32 @@ def _rejected_message(check: str, *, looks_right: bool, guessed: bool = False) -
             f"BLUESKY_HANDLE exists, so BLUESKY_APP_PASSWORD is probably wrong{odd}: make a new App Password "
             f"({APP_PASSWORDS}), or if that account isn't the bot's, fix BLUESKY_HANDLE"
         )
+    either = (
+        ""
+        if looks_right
+        else f". BLUESKY_APP_PASSWORD doesn't look like an App Password either ({APP_PASSWORD_SHAPE}; "
+        f"{APP_PASSWORDS})"
+    )
+    if check == HANDLE_EXTRA_TEXT:
+        return f"BLUESKY_HANDLE has extra text after .bsky.social - it should be only the handle{either}"
     if check == HANDLE_MISSING:
-        odd = (
-            ""
-            if looks_right
-            else f". BLUESKY_APP_PASSWORD doesn't look like an App Password either ({APP_PASSWORD_SHAPE}; "
-            f"{APP_PASSWORDS})"
-        )
         return (
             "BLUESKY_HANDLE is not a Bluesky account: use the full handle, like yourname.bsky.social "
-            f"(no @, no link, not the display name){odd}"
+            f"(no @, no link, not the display name){either}"
         )
     return (
         f"{_REJECTED_PREFIX} — create a new App Password (Bluesky {APP_PASSWORDS}), update the secret, "
         f"and check BLUESKY_HANDLE{odd}"
     )
+
+
+def _untried_message(retry_at: datetime | None) -> str:
+    """New secrets met the daily login cap before their first login: nothing is known about them yet."""
+    if retry_at is None:
+        return (
+            "bluesky.max_sessions_per_day in sources.yaml allows no logins: raise it to try the new secrets"
+        )
+    return f"daily login limit reached; the new secrets will be tried on the first run after {_iso(retry_at)}"
 
 
 def _login_error_message(reply: _Reply) -> str:
