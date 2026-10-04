@@ -93,7 +93,7 @@ class FeatureSettings(_Cfg):
 
 class PenaltySettings(_Cfg):
     negativity_threshold: float = 0.30
-    negativity_min_commenters: int = 5
+    negativity_min_commenters: int = 3  # 1 of 2 is a fluke; 3 of 4 is a pattern
     negativity_points: float = 15.0
     old_release_days: int = 30
     old_release_points: float = 20.0

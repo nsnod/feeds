@@ -283,7 +283,17 @@ class Evidence(_Model):
     rank_channel: str | None = None
     hours_on_list: float | None = None
     follower_growth: int | None = None
-    audience: int | None = None
+    audience: int | None = None  # audience of the best (velocity) post
+    # The post behind the underdog feature (the most engaged post with a known audience);
+    # often not the velocity post above.
+    underdog_mention_key: str | None = None
+    underdog_source: str | None = None
+    underdog_channel: str | None = None
+    underdog_likes: int = 0
+    underdog_comments: int = 0
+    underdog_shares: int = 0
+    underdog_audience: int | None = None
+    meme_jokers: int = 0  # distinct Roblox jokers that counted (only under posts with enough comments)
     sources_72h: list[str] = Field(default_factory=list)
     sources_24h: list[str] = Field(default_factory=list)
     fit_hits: list[str] = Field(default_factory=list)

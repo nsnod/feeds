@@ -8,6 +8,7 @@ from datetime import date, timedelta
 import pytest
 
 from gembot.config import Blocklist
+from gembot.enrich.entity import Resolver
 from gembot.models import (
     Adjustment,
     CommentSignals,
@@ -88,6 +89,53 @@ def test_blocklist_checks_game_and_steam_companies():
     assert "Capcom" in blocklist_reason(make_game(), [via_mention], BLOCK)
 
 
+def test_reddit_username_is_not_a_blocklisted_developer():
+    """A solo dev u/Valve_Index_Fan posts "my game ...": the resolver guesses the poster is the
+    developer, but a username that merely starts with "Valve" is not the studio Valve."""
+    post = make_mention(
+        "reddit",
+        "solo1",
+        title="My co-op horror game Moon Goblins just got a Steam page!",
+        text="Proximity chat, 4 players, made it alone over 2 years.",
+        author="Valve_Index_Fan",
+        likes=150,
+        comments=30,
+        channel="r/IndieDev",
+    )
+    post.first_seen = NOW
+    games: dict = {}
+    stored = {post.key: post}
+    Resolver(games, stored, now=NOW, settings=CONFIG.sources.resolver).resolve([post])
+    (game,) = games.values()
+    assert game.developer == "Valve_Index_Fan"  # the resolver's guess, from the post author
+    assert blocklist_reason(game, [stored[post.key]], BLOCK) is None
+    assert not score(game, [stored[post.key]]).excluded
+
+
+@pytest.mark.parametrize("source", ["reddit", "bluesky", "x", "rss"])
+def test_blocklist_ignores_poster_usernames_but_not_real_companies(source):
+    poster = make_mention(source, "p1", author="valve_index_fan")
+    fan = make_game(developer="Valve_Index_Fan")
+    assert blocklist_reason(fan, [poster], BLOCK) is None
+    # the same name with no post by that person is a developer name like any other
+    assert blocklist_reason(fan, [], BLOCK) == "big studio: Valve (developer 'Valve_Index_Fan')"
+    # Steam's developer/publisher lists and Game.publisher are always checked
+    steam = make_game(developer="Valve_Index_Fan", steam=SteamInfo(appid=9, developers=["Valve Corporation"]))
+    assert "Valve" in blocklist_reason(steam, [poster], BLOCK)
+    publisher = make_game(developer="Valve_Index_Fan", publisher="Valve")
+    assert blocklist_reason(publisher, [poster], BLOCK) == "big studio: Valve (publisher 'Valve')"
+    # an account that IS the studio (exactly its name) still counts
+    official = make_mention(source, "p2", author="Ubisoft")
+    assert "Ubisoft" in blocklist_reason(make_game(developer="Ubisoft"), [official], BLOCK)
+
+
+def test_blocklist_store_listing_authors_are_not_usernames():
+    """itch.io / Steam listings are not posts by a person: their developer still matches."""
+    listing = make_mention("itch", "valvestuff/thing", author="Valve_Index_Fan", channel="itch:new")
+    game = make_game(developer="Valve_Index_Fan")
+    assert blocklist_reason(game, [listing], BLOCK) == "big studio: Valve (developer 'Valve_Index_Fan')"
+
+
 def test_blocklist_banned_keywords_are_whole_words():
     assert blocklist_reason(make_game(title="Crypto Raiders"), [], BLOCK) == "banned keyword: 'crypto'"
     m = make_mention(text="Earn tokens: a play-to-earn adventure")
@@ -154,8 +202,18 @@ def test_negativity_penalty():
     assert result.penalties[0].points == 15
     assert result.penalties[0].detail == "4 of 10 commenters negative (asset flip, scam)"
     assert score(game, [], negativity(3, 10)).penalties == []  # exactly 30% is not above 30%
-    assert score(game, [], negativity(4, 4)).penalties == []  # too few commenters
+    assert score(game, [], negativity(2, 2)).penalties == []  # too few commenters (minimum 3)
+    assert score(game, [], negativity(1, 2)).penalties == []  # 1 grumpy reply of 2 is a fluke
     assert score(game, []).penalties == []
+
+
+def test_negativity_minimum_is_three_commenters():
+    assert CONFIG.settings.penalties.negativity_min_commenters == 3
+    small = score(make_game(), [], negativity(3, 4))  # 75% of 4 people
+    assert [p.code for p in small.penalties] == ["negativity"]
+    assert small.penalties[0].detail == "3 of 4 commenters negative (asset flip, scam)"
+    assert [p.code for p in score(make_game(), [], negativity(2, 3)).penalties] == ["negativity"]
+    assert score(make_game(), [], negativity(2, 2)).penalties == []  # below the minimum
 
 
 def test_negativity_penalty_detail_without_terms():
@@ -245,6 +303,29 @@ def test_roblox_bonus_with_velocity_instead_of_comments():
 def test_no_roblox_bonus_below_meme_threshold_or_on_tiny_posts():
     assert score(make_game(), [make_mention(comments=40)], roblox(2, 40)).bonuses == []
     assert score(make_game(), [make_mention(comments=6)], roblox(5, 6)).bonuses == []
+
+
+def test_roblox_bonus_per_post_gate_and_game_level_comment_total():
+    """Jokers only count under posts with 10+ comments; the bonus's "30+ comments" is the
+    game's whole discussion (two 20-comment posts = 40), and the 🧱 line quotes the jokers
+    that counted."""
+    a = make_mention("reddit", "a", channel="r/IndieDev", comments=20, hours_ago=40)
+    b = make_mention("bluesky", "b", comments=20, hours_ago=40)
+    tiny = make_mention("reddit", "tiny", channel="r/IndieDev", comments=6, hours_ago=40)
+    a.signals, b.signals, tiny.signals = roblox(2, 20), roblox(1, 20), roblox(5, 6)
+    merged = roblox(8, 46)
+    result = score(make_game(), [a, b, tiny], merged)
+    assert result.evidence.meme_jokers == 3 and result.evidence.total_comments == 46
+    assert result.features.meme == pytest.approx(0.6) and result.features.velocity < 0.4
+    assert [(b.code, b.detail) for b in result.bonuses] == [
+        ("roblox_bonus", "3 commenters joking it's a Roblox game")
+    ]
+    assert "🧱 Roblox-clone discourse: 3 commenters joking it's a Roblox game" in result.reasons
+    # only the 6-comment post jokes: nothing counts, no bonus, no 🧱 line
+    a.signals, b.signals = roblox(0, 20), roblox(0, 20)
+    quiet = score(make_game(), [a, b, tiny], merged.model_copy(update={"roblox_commenters": 5}))
+    assert quiet.features.meme == 0.0 and quiet.bonuses == []
+    assert not any(r.startswith("🧱") for r in quiet.reasons)
 
 
 def test_score_clamped_to_100():
@@ -408,30 +489,71 @@ def test_steam_follower_line():
     assert lines[0] == "+340 Steam followers in the last few days"
 
 
+def underdog_ev(source, *, likes=0, comments=0, shares=0, audience=None, channel=None) -> Evidence:
+    return Evidence(
+        underdog_source=source,
+        underdog_channel=channel,
+        underdog_likes=likes,
+        underdog_comments=comments,
+        underdog_shares=shares,
+        underdog_audience=audience,
+    )
+
+
 def test_underdog_lines():
-    ev = Evidence(best_source="bluesky", best_likes=480, audience=2100)
+    ev = underdog_ev("bluesky", likes=480, audience=2100)
     lines = build_reasons(result_with(evidence=ev, features=Features(underdog=0.8)), make_game(), now=NOW)
     assert "Small creator: 2,100 followers, 480 likes" in lines
-    ev = Evidence(best_source="x", best_comments=30, best_shares=5, audience=150)
+    ev = underdog_ev("x", comments=30, shares=5, audience=150)
     lines = build_reasons(result_with(evidence=ev, features=Features(underdog=0.8)), make_game(), now=NOW)
     assert "Small creator: 150 followers, 35 reactions" in lines
-    ev = Evidence(best_source="reddit", best_channel="r/CoOpGaming", best_likes=250, audience=21_000)
+    ev = underdog_ev("reddit", channel="r/CoOpGaming", likes=250, audience=21_000)
     lines = build_reasons(result_with(evidence=ev, features=Features(underdog=0.4)), make_game(), now=NOW)
     assert "Big reaction for a small sub: 250 upvotes in r/CoOpGaming (21k members)" in lines
-    ev = Evidence(best_source="bluesky", best_likes=30_000, audience=48_000)
+    ev = underdog_ev("bluesky", likes=30_000, audience=48_000)
     lines = build_reasons(result_with(evidence=ev, features=Features(underdog=0.9)), make_game(), now=NOW)
     assert "Big reaction for the account's size: 30k likes with 48k followers" in lines
     for ev, underdog in (
-        (Evidence(best_source="reddit", best_channel="r/CoOpGaming", audience=21_000), 0.4),
-        (Evidence(best_source="reddit", best_channel="r/gamedev", best_likes=9, audience=1_900_000), 0.4),
-        (Evidence(best_source="bluesky", best_likes=3, audience=5_000), 0.29),
-        (Evidence(best_source="bluesky", audience=10), 0.4),
-        (Evidence(best_source=None, audience=10), 0.4),
+        (underdog_ev("reddit", channel="r/CoOpGaming", audience=21_000), 0.4),
+        (underdog_ev("reddit", channel="r/gamedev", likes=9, audience=1_900_000), 0.4),
+        (underdog_ev("bluesky", likes=3, audience=5_000), 0.29),
+        (underdog_ev("bluesky", audience=10), 0.4),
+        (underdog_ev(None, audience=10), 0.4),
+        # the velocity post's numbers are not the underdog post's numbers
+        (Evidence(best_source="bluesky", best_likes=480, audience=2100), 0.8),
     ):
         lines = build_reasons(
             result_with(evidence=ev, features=Features(underdog=underdog)), make_game(), now=NOW
         )
-        assert not any("small" in line.lower() or "size" in line for line in lines)
+        claims = ("small", "followers", "members")
+        assert not any(word in line.lower() for line in lines for word in claims), lines
+    # a strong underdog value without quotable numbers only gets the generic filler line
+    ev = Evidence(best_source="bluesky", best_likes=480, best_age_hours=3, audience=2100)
+    lines = build_reasons(result_with(evidence=ev, features=Features(underdog=0.8)), make_game(), now=NOW)
+    assert lines == ["480 likes in 3h on Bluesky", "Big reaction for the size of its audience"]
+
+
+def test_underdog_line_quotes_the_underdog_post_not_the_velocity_post():
+    """A hot Bluesky post drives velocity; a 500-upvote post in a 200-member sub drives underdog."""
+    bsky = make_mention("bluesky", "b1", title="Moon Goblins", likes=50, hours_ago=2, audience=5000)
+    reddit = make_mention(
+        "reddit", "r1", title="Moon Goblins", likes=500, hours_ago=70, audience=200, channel="r/tinysub"
+    )
+    result = score(make_game(), [bsky, reddit])
+    ev = result.evidence
+    assert result.features.underdog == 1.0
+    assert (ev.best_source, ev.best_likes, ev.audience) == ("bluesky", 50, 5000)  # velocity post
+    assert (ev.underdog_mention_key, ev.underdog_source, ev.underdog_channel) == (
+        "reddit:r1",
+        "reddit",
+        "r/tinysub",
+    )
+    assert (ev.underdog_likes, ev.underdog_audience) == (500, 200)
+    assert "Big reaction for a small sub: 500 upvotes in r/tinysub (200 members)" in result.reasons
+    assert not any("5,000 followers" in line for line in result.reasons)
+    # no audience known anywhere: no underdog evidence, no underdog line
+    plain = score(make_game(), [make_mention(likes=500)])
+    assert plain.evidence.underdog_source is None and plain.features.underdog == 0.0
 
 
 def test_cross_line_falls_back_to_three_days():
@@ -460,6 +582,7 @@ def test_roblox_line_is_pinned_when_bonus_applied():
         sources_24h=["reddit", "bluesky"],
         sources_72h=["reddit", "bluesky"],
         signals=CommentSignals(roblox_commenters=11, intent_commenters=9),
+        meme_jokers=11,
     )
     features = Features(velocity=1, cross=0.6, fit=1, hype=1, meme=0.6, fresh=1, underdog=1)
     bonus = Adjustment(code="roblox_bonus", points=8)
@@ -471,6 +594,7 @@ def test_roblox_line_is_pinned_when_bonus_applied():
     no_bonus = build_reasons(result_with(evidence=ev, features=features), make_game(), now=NOW, max_reasons=2)
     assert not any(line.startswith("🧱") for line in no_bonus)
     ev.signals = CommentSignals(roblox_commenters=1)
+    ev.meme_jokers = 1
     lines = build_reasons(result_with(evidence=ev, features=Features(meme=0.2)), make_game(), now=NOW)
     assert lines[0] == "🧱 Roblox-clone discourse: 1 commenter joking it's a Roblox game"
 
@@ -537,9 +661,7 @@ def test_reasons_never_empty_and_respect_max():
     lines = build_reasons(ScoreResult(game_id="t:x"), make_game(title="Quiet Game"), now=NOW)
     assert lines == ["Quiet Game turned up in GemBot's scan (Gem Score 0)"]
     ev = Evidence(sources_72h=["reddit", "itch"])
-    assert build_reasons(result_with(evidence=ev), make_game(), now=NOW) == [
-        "New indie game spotted on Reddit and itch.io"
-    ]
+    assert build_reasons(result_with(evidence=ev), make_game(), now=NOW) == ["Spotted on Reddit and itch.io"]
     ev = Evidence(
         best_source="reddit",
         best_channel="r/x",
@@ -572,6 +694,104 @@ def test_reasons_never_empty_and_respect_max():
     assert len(build_reasons(full, make_game(), now=NOW, max_reasons=0)) == 1
     unweighted = full.model_copy(update={"weights": {}})
     assert len(build_reasons(unweighted, make_game(), now=NOW)) == 4
+
+
+def test_roundup_worthy_game_gets_at_least_two_reasons():
+    """BUILD_SPEC 4.6 "2-4 reasons": one hot post in a huge sub (velocity 1.0), one older post
+    with a big reaction in a tiny sub (underdog 1.0), first seen 8 days ago (fresh 0.5)."""
+    hot = make_mention(
+        "reddit", "hot", title="Moon Goblins", likes=200, hours_ago=1, audience=1_500_000, channel="r/gamedev"
+    )
+    small = make_mention(
+        "reddit", "small", title="Moon Goblins", likes=300, hours_ago=70, audience=50, channel="r/tinysub"
+    )
+    old = make_mention("reddit", "old", title="Moon Goblins", likes=1, hours_ago=8 * 24, channel="r/tinysub")
+    game = make_game(first_seen=NOW - timedelta(days=8))
+    result = score(game, [hot, small, old])
+    assert result.score >= CONFIG.settings.decisions.roundup_score
+    assert result.reasons == [
+        "200 upvotes in 1h on r/gamedev (67× normal for that sub)",
+        "Big reaction for a small sub: 300 upvotes in r/tinysub (50 members)",
+    ]
+
+
+def one_line_result(**evidence) -> ScoreResult:
+    """A game whose only strong feature is a velocity line on r/IndieDev."""
+    ev = Evidence(
+        best_source="reddit",
+        best_channel="r/IndieDev",
+        best_likes=300,
+        best_age_hours=2,
+        velocity_multiple=12,
+        sources_72h=["reddit"],
+        sources_24h=["reddit"],
+    )
+    return result_with(evidence=ev.model_copy(update=evidence), features=Features(velocity=0.9))
+
+
+VELOCITY_LINE = "300 upvotes in 2h on r/IndieDev (12× normal for that sub)"
+
+
+def test_fillers_pad_a_single_reason_to_two_in_order():
+    old = NOW - timedelta(days=9)
+    steam_game = make_game(steam=SteamInfo(appid=5, genres=["Action", "Indie", "Casual"], price="$4.99"))
+    # 1. the strongest feature without a line of its own, in general words
+    generic = one_line_result(first_seen=old)
+    generic.features.underdog = 0.7
+    assert build_reasons(generic, steam_game, now=NOW) == [
+        VELOCITY_LINE,
+        "Big reaction for the size of its audience",
+    ]
+    # 2. facts from the Steam page
+    assert build_reasons(one_line_result(first_seen=old), steam_game, now=NOW) == [
+        VELOCITY_LINE,
+        "Steam page: Action, Indie, $4.99",
+    ]
+    free = make_game(steam=SteamInfo(appid=6, is_free=True))
+    assert build_reasons(one_line_result(), free, now=NOW)[1] == "Steam page: free to play"
+    # 3. when GemBot first spotted it (the "New find" line stops after 7 days)
+    assert build_reasons(one_line_result(first_seen=old), make_game(), now=NOW) == [
+        VELOCITY_LINE,
+        "First spotted 9 days ago",
+    ]
+    # 4. where it was seen
+    assert build_reasons(one_line_result(), make_game(), now=NOW) == [VELOCITY_LINE, "Spotted on r/IndieDev"]
+    two_places = one_line_result(sources_72h=["reddit", "itch"])
+    assert build_reasons(two_places, make_game(), now=NOW)[1] == "Spotted on r/IndieDev and itch.io"
+
+
+def test_fillers_never_repeat_a_topic_or_exceed_two():
+    # a weak (but real) fresh line already covers "first seen": no "First spotted" filler
+    recent = one_line_result(first_seen=NOW - timedelta(hours=30))
+    recent.features.fresh = 0.05
+    assert build_reasons(recent, make_game(), now=NOW) == [VELOCITY_LINE, "New find: first seen 30h ago"]
+    # the co-op Steam line covers the Steam page: no genre/price filler
+    coop = make_game(steam=SteamInfo(appid=7, categories=["Online Co-op"], genres=["Action"], price="$1"))
+    assert build_reasons(one_line_result(), coop, now=NOW)[1] == "Steam page: Online Co-op"
+    # weak features below GENERIC_LINE_MIN get no generic line
+    weak = one_line_result()
+    weak.features.underdog = 0.3
+    assert "Big reaction for the size of its audience" not in build_reasons(weak, make_game(), now=NOW)
+    # two strong lines: no filler at all
+    strong = one_line_result(fit_hits=["proximity chat"])
+    strong.features.fit = 1.0
+    assert build_reasons(strong, make_game(), now=NOW) == [VELOCITY_LINE, "Friendslop fit: proximity chat"]
+    # a cross line makes "Spotted on" redundant
+    cross = one_line_result(sources_72h=["reddit", "itch"], sources_24h=["reddit", "itch"])
+    cross.features.cross = 0.6
+    lines = build_reasons(cross, make_game(), now=NOW)
+    assert lines == [VELOCITY_LINE, "Seen on Reddit and itch.io in the last 24h"]
+
+
+def test_every_scored_game_with_a_mention_gets_two_to_four_reasons():
+    rng = random.Random(77)
+    ctx = ctx_with(samples("r/IndieDev", [rng.uniform(0, 50) for _ in range(12)]))
+    for _ in range(300):
+        game, mentions, signals = random_case(rng)
+        result = score_game(game, mentions, ctx, WEIGHTS, Blocklist(), signals)
+        if mentions:
+            assert 2 <= len(result.reasons) <= 4, result.reasons
+        assert len(set(result.reasons)) == len(result.reasons)
 
 
 def test_llm_present_game_still_scores():
