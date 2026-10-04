@@ -1,0 +1,264 @@
+{
+  "kind": "Listing",
+  "data": {
+    "after": "t3_1x7old1",
+    "dist": 8,
+    "modhash": null,
+    "geo_filter": "",
+    "before": null,
+    "children": [
+      {
+        "kind": "t3",
+        "data": {
+          "id": "1xa1b2c",
+          "name": "t3_1xa1b2c",
+          "title": "We just announced our co-op horror game BELLHOP PANIC - proximity chat, ragdolls, the lot",
+          "selftext": "Hey all! After 14 months we finally announced **Bellhop Panic**, a 1-4 player co-op horror game with proximity chat & ragdolls.\n\nWishlist on Steam: https://store.steampowered.com/app/3456780/Bellhop_Panic/.\n\nTrailer: [here](https://www.youtube.com/watch?v=abc123XYZ_0) (feedback welcome!)\n\n![gif](https://preview.redd.it/bellhop-gif.gif?width=640&format=mp4&s=1a2b)\n\nDevlog at <https://bellhop.example.com/devlog>.",
+          "author": "bellhop_studio",
+          "subreddit": "IndieDev",
+          "subreddit_name_prefixed": "r/IndieDev",
+          "subreddit_subscribers": 263114,
+          "created_utc": 1791021600.0,
+          "score": 152,
+          "ups": 152,
+          "num_comments": 23,
+          "upvote_ratio": 0.94,
+          "url": "https://www.reddit.com/r/IndieDev/comments/1xa1b2c/we_just_announced_our_coop_horror_game_bellhop/",
+          "permalink": "/r/IndieDev/comments/1xa1b2c/we_just_announced_our_coop_horror_game_bellhop/",
+          "link_flair_text": "Promotion",
+          "thumbnail": "self",
+          "preview": {
+            "images": [
+              {
+                "source": {
+                  "url": "https://preview.redd.it/bellhop-gif.gif?width=640&amp;format=png&amp;auto=webp&amp;s=9f8e7d",
+                  "width": 640,
+                  "height": 360
+                },
+                "resolutions": [],
+                "id": "bellhopgif"
+              }
+            ],
+            "enabled": false
+          },
+          "is_self": true,
+          "over_18": false,
+          "stickied": false,
+          "spoiler": false,
+          "domain": "self.IndieDev",
+          "is_video": false
+        }
+      },
+      {
+        "kind": "t3",
+        "data": {
+          "id": "1xa0abc",
+          "name": "t3_1xa0abc",
+          "title": "Gorilla Pizza Panic - our 4-player physics co-op about delivering pizza as gorillas. Steam page is up!",
+          "selftext": "",
+          "author": "gpp_team",
+          "subreddit": "IndieGaming",
+          "subreddit_name_prefixed": "r/IndieGaming",
+          "subreddit_subscribers": 390512,
+          "created_utc": 1791018000.0,
+          "score": 41,
+          "ups": 41,
+          "num_comments": 9,
+          "upvote_ratio": 0.88,
+          "url": "https://store.steampowered.com/app/2988000/Gorilla_Pizza_Panic/",
+          "permalink": "/r/IndieGaming/comments/1xa0abc/gorilla_pizza_panic_our_4player_physics_coop/",
+          "link_flair_text": null,
+          "thumbnail": "https://b.thumbs.redditmedia.com/gpp_thumb.jpg",
+          "is_self": false,
+          "over_18": false,
+          "stickied": false,
+          "spoiler": false,
+          "domain": "store.steampowered.com",
+          "is_video": false
+        }
+      },
+      {
+        "kind": "t3",
+        "data": {
+          "id": "1xa0zz9",
+          "name": "t3_1xa0zz9",
+          "title": "Raccoon Rumble - a chaotic 4-player trash heist (free on itch)",
+          "selftext": "",
+          "author": "raccoon_dev",
+          "subreddit": "playmygame",
+          "subreddit_name_prefixed": "r/playmygame",
+          "subreddit_subscribers": 105230,
+          "created_utc": 1791016200.0,
+          "score": 12,
+          "ups": 12,
+          "num_comments": 4,
+          "upvote_ratio": 1.0,
+          "url": "https://raccoondev.itch.io/raccoon-rumble",
+          "permalink": "/r/playmygame/comments/1xa0zz9/raccoon_rumble_a_chaotic_4player_trash_heist/",
+          "link_flair_text": "Multiplayer",
+          "thumbnail": "default",
+          "is_self": false,
+          "over_18": false,
+          "stickied": false,
+          "spoiler": false,
+          "domain": "raccoondev.itch.io",
+          "is_video": false
+        }
+      },
+      {
+        "kind": "t3",
+        "data": {
+          "id": "1x9zz2z",
+          "name": "t3_1x9zz2z",
+          "title": "How do I stop my CharacterBody3D jittering on slopes? (4.5)",
+          "selftext": "I'm using move_and_slide() with floor_snap_length = 0.5 and it still jitters (see https://docs.godotengine.org/en/stable/classes/class\\_characterbody3d.html). Any ideas?",
+          "author": "quietgecko",
+          "subreddit": "godot",
+          "subreddit_name_prefixed": "r/godot",
+          "subreddit_subscribers": 252040,
+          "created_utc": 1791010800.0,
+          "score": 3,
+          "ups": 3,
+          "num_comments": 4,
+          "upvote_ratio": 0.8,
+          "url": "https://www.reddit.com/r/godot/comments/1x9zz2z/how_do_i_stop_my_characterbody3d_jittering_on/",
+          "permalink": "/r/godot/comments/1x9zz2z/how_do_i_stop_my_characterbody3d_jittering_on/",
+          "link_flair_text": "help me",
+          "thumbnail": "self",
+          "is_self": true,
+          "over_18": false,
+          "stickied": false,
+          "spoiler": false,
+          "domain": "self.godot",
+          "is_video": false
+        }
+      },
+      {
+        "kind": "t3",
+        "data": {
+          "id": "1x5mod1",
+          "name": "t3_1x5mod1",
+          "title": "Weekly self-promotion thread",
+          "selftext": "Post your games here.",
+          "author": "AutoModerator",
+          "subreddit": "gamedev",
+          "subreddit_name_prefixed": "r/gamedev",
+          "subreddit_subscribers": 1900321,
+          "created_utc": 1791014400.0,
+          "score": 5,
+          "ups": 5,
+          "num_comments": 31,
+          "upvote_ratio": 0.9,
+          "url": "https://www.reddit.com/r/gamedev/comments/1x5mod1/weekly_selfpromotion_thread/",
+          "permalink": "/r/gamedev/comments/1x5mod1/weekly_selfpromotion_thread/",
+          "link_flair_text": null,
+          "thumbnail": "self",
+          "is_self": true,
+          "over_18": false,
+          "stickied": true,
+          "spoiler": false,
+          "domain": "self.gamedev",
+          "is_video": false
+        }
+      },
+      {
+        "kind": "t3",
+        "data": {
+          "id": "1xa0nsf",
+          "name": "t3_1xa0nsf",
+          "title": "Our adult dating sim has a demo",
+          "selftext": "",
+          "author": "spicy_studio",
+          "subreddit": "IndieGaming",
+          "subreddit_name_prefixed": "r/IndieGaming",
+          "subreddit_subscribers": 390512,
+          "created_utc": 1791016200.0,
+          "score": 7,
+          "ups": 7,
+          "num_comments": 2,
+          "upvote_ratio": 0.7,
+          "url": "https://store.steampowered.com/app/3999999/",
+          "permalink": "/r/IndieGaming/comments/1xa0nsf/our_adult_dating_sim_has_a_demo/",
+          "link_flair_text": null,
+          "thumbnail": "nsfw",
+          "is_self": false,
+          "over_18": true,
+          "stickied": false,
+          "spoiler": false,
+          "domain": "store.steampowered.com",
+          "is_video": false
+        }
+      },
+      {
+        "kind": "t3",
+        "data": {
+          "id": "1x9zq3k",
+          "name": "t3_1x9zq3k",
+          "title": "First gameplay of our physics party game",
+          "selftext": "",
+          "author": "pixelfox_dev",
+          "subreddit": "IndieGaming",
+          "subreddit_name_prefixed": "r/IndieGaming",
+          "subreddit_subscribers": 390512,
+          "created_utc": 1791010800.0,
+          "score": 88,
+          "ups": 88,
+          "num_comments": 17,
+          "upvote_ratio": 0.96,
+          "url": "https://v.redd.it/k3j9x2m1abcd1",
+          "permalink": "/r/IndieGaming/comments/1x9zq3k/first_gameplay_of_our_physics_party_game/",
+          "link_flair_text": "Video",
+          "thumbnail": "https://b.thumbs.redditmedia.com/fox_thumb.jpg",
+          "preview": {
+            "images": [
+              {
+                "source": {
+                  "url": "https://external-preview.redd.it/fox.png?width=1280&amp;format=png&amp;auto=webp&amp;s=0f1e2d",
+                  "width": 1280,
+                  "height": 720
+                },
+                "resolutions": [],
+                "id": "fox"
+              }
+            ],
+            "enabled": false
+          },
+          "is_self": false,
+          "over_18": false,
+          "stickied": false,
+          "spoiler": false,
+          "domain": "v.redd.it",
+          "is_video": true
+        }
+      },
+      {
+        "kind": "t3",
+        "data": {
+          "id": "1x7old1",
+          "name": "t3_1x7old1",
+          "title": "Four days ago I posted my co-op prototype",
+          "selftext": "",
+          "author": "slow_poster",
+          "subreddit": "Unity3D",
+          "subreddit_name_prefixed": "r/Unity3D",
+          "subreddit_subscribers": 409877,
+          "created_utc": 1790668800.0,
+          "score": 300,
+          "ups": 300,
+          "num_comments": 80,
+          "upvote_ratio": 0.97,
+          "url": "https://store.steampowered.com/app/3111111/",
+          "permalink": "/r/Unity3D/comments/1x7old1/four_days_ago_i_posted_my_coop_prototype/",
+          "link_flair_text": null,
+          "thumbnail": "",
+          "is_self": false,
+          "over_18": false,
+          "stickied": false,
+          "spoiler": false,
+          "domain": "store.steampowered.com",
+          "is_video": false
+        }
+      }
+    ]
+  }
+}
