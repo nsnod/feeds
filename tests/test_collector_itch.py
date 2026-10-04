@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -916,3 +917,135 @@ def test_feed_tags():
     assert feed_tags(COOP) == ["co-op"]
     assert feed_tags(f"{BASE}/newest/tag-horror/tag-physics.xml?page=2") == ["horror", "physics"]
     assert feed_tags(NP) == []
+
+
+# ---------------------------------------------------------------- hostile input (review)
+
+MB = 1 << 20
+
+
+class CountingStream(httpx.SyncByteStream):
+    """A huge body that records how much the client pulled (``tripwire`` keeps the test small
+    even if the code under test never stops reading)."""
+
+    def __init__(self, head: bytes, total: int, *, chunk: int = MB, tripwire: int = 24 * MB):
+        self.head, self.total, self.chunk, self.tripwire = head, total, chunk, tripwire
+        self.pulled = 0
+
+    def __iter__(self):
+        self.pulled += len(self.head)
+        yield self.head
+        while self.pulled < self.total:
+            if self.pulled >= self.tripwire:
+                raise RuntimeError(f"tripwire: client kept reading past {self.pulled} bytes")
+            size = min(self.chunk, self.total - self.pulled)
+            self.pulled += size
+            yield b" " * size
+
+
+def test_redirect_hops_are_charged_to_the_per_run_budget():
+    """Regression (HttpClient): a redirect loop used to cost 21 real requests per attempt while the
+    budget was charged once per attempt (63 requests to itch.io against a budget of 12)."""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(302, headers={"Location": NP})
+
+    http = make_http(httpx.MockTransport(handler))
+    _mentions, report = collector(itch_config([FEED_NP]), budget=12, http=http).run()
+    assert report.errors and "too many redirects" in report.errors[0]
+    assert len(calls) == report.requests <= 12
+
+
+def test_size_cap_bounds_the_download_not_just_the_parse():
+    """MAX_FEED_BYTES used to be checked only after HttpClient had buffered the whole body."""
+    stream = CountingStream(b'<?xml version="1.0"?><rss version="2.0"><channel>', 64 * MB)
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, headers={"content-type": "application/rss+xml"}, stream=stream)
+    )
+    mentions, report = collector(itch_config([FEED_NP]), http=make_http(transport)).run()
+    assert mentions == [] and f"larger than {itch_mod.MAX_FEED_BYTES} bytes" in report.errors[0]
+    assert stream.pulled <= itch_mod.MAX_FEED_BYTES + MB, f"read {stream.pulled / MB:.0f} MB"
+
+
+def test_a_smaller_client_wide_cap_is_kept():
+    stream = CountingStream(b'<?xml version="1.0"?><rss version="2.0"><channel>', 8 * MB)
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, stream=stream))
+    _mentions, report = collector(itch_config([FEED_NP]), http=make_http(transport, max_bytes=MB)).run()
+    assert f"larger than {MB} bytes" in report.errors[0] and stream.pulled <= 2 * MB
+
+
+@pytest.mark.parametrize(
+    "prolog",
+    [
+        b'<?xml version="1.0"?><!-- <rss --><!DOCTYPE rss [<!ENTITY a "AAAAAAAAAA">]>',  # "<rss" first
+        b'<?xml version="1.0"?><?rss <rss?><!DOCTYPE rss [<!ENTITY a "AAAAAAAAAA">]>',
+        b'<?xml version="1.0"?>\n<!doctype rss [<!ENTITY a "AAAAAAAAAA">]>',
+    ],
+)
+def test_doctype_guard_covers_the_whole_document(prolog):
+    """The guard used to search only before the first b"<rss", so a comment or PI that says "<rss"
+    let the internal DTD through and its entities were expanded."""
+    doc = prolog + (
+        b'<rss version="2.0"><channel><title>t</title>'
+        b"<item><link>https://dev.itch.io/game</link><plainTitle>&a;&a;&a;</plainTitle></item>"
+        b"</channel></rss>"
+    )
+    with pytest.raises(ItchFeedError, match="DOCTYPE"):
+        page = parse_feed(doc, now=NOW)
+        pytest.fail(f"DTD accepted, entity expanded into the title: {page.items[0].name!r}")
+
+
+def test_doctype_cannot_hide_in_another_encoding():
+    """expat reads UTF-16 natively, where "<!DOCTYPE" is not the bytes b"<!DOCTYPE": the body is
+    decoded first and the very text that is checked is what gets parsed."""
+    text = (
+        '<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE rss [<!ENTITY a "AAAAAAAAAA">]>'
+        '<rss version="2.0"><channel><title>t</title>'
+        "<item><link>https://dev.itch.io/game</link><plainTitle>&a;&a;</plainTitle></item></channel></rss>"
+    )
+    with pytest.raises(ItchFeedError, match="not UTF-8"):
+        parse_feed(text.encode("utf-16"), now=NOW)
+    with pytest.raises(ItchFeedError, match="not UTF-8"):
+        parse_feed(feed_of([b"<item><plainTitle>Caf\xe9</plainTitle></item>"]), now=NOW)
+    # a UTF-8 BOM is fine, and so is a declaration naming another encoding (the text is UTF-8)
+    page = parse_feed(b"\xef\xbb\xbf" + fx("new_and_popular.xml"), now=NOW)
+    assert len(page.items) == 7
+    cafe = b"<item><link>https://dev.itch.io/cafe</link><plainTitle>Caf\xc3\xa9</plainTitle></item>"
+    page = parse_feed(feed_of([cafe]).replace(b'encoding="UTF-8"', b'encoding="ISO-8859-1"'), now=NOW)
+    assert page.items[0].name == "Café"
+
+
+@pytest.mark.parametrize(
+    ("piece", "size"),
+    [("<img ", 60_000), ("<", 60_000), ("<a ", 120_000), ('<img src="', 150_000), ("<img src=x ", 60_000)],
+)
+def test_description_regexes_are_linear(piece, size):
+    """_IMG_TAG (<img\\b[^>]*>), _HTML_TAG (<[^>]+>) and _IMG_SRC were O(n^2) on many "<" without
+    ">": 1.5-6 s on these unclipped inputs (a 5 MB page: over an hour); now a few ms."""
+    value = piece * (size // len(piece))
+    started = time.monotonic()
+    itch_mod._IMG_TAG.sub(" ", value)
+    itch_mod._HTML_TAG.sub(" ", value)
+    itch_mod._IMG_SRC.search(value)
+    elapsed = time.monotonic() - started
+    assert elapsed < 0.5, f"{piece!r} x {size // len(piece)}: description regexes took {elapsed:.2f}s"
+
+
+def test_long_description_is_clipped_and_cheap():
+    """The review case: 100 KB of "<img " in one description took ~2 s to parse."""
+    item = (
+        b"<item><link>https://dev.itch.io/game</link><plainTitle>Game</plainTitle>"
+        b"<description><![CDATA[<img src='https://img.itch.zone/a.png'> Fun co-op game "
+        + b"<img " * 20_000
+        + b"]]></description></item>"
+    )
+    started = time.monotonic()
+    page = parse_feed(feed_of([item]), now=NOW)
+    elapsed = time.monotonic() - started
+    assert elapsed < 0.5, f"parsing a 100 KB description took {elapsed:.2f}s"
+    game = page.items[0]
+    assert game.image == "https://img.itch.zone/a.png" and game.text.startswith("Fun co-op game")
+    assert len(game.text) <= itch_mod.MAX_TEXT_CHARS
+    assert short_text("a" * (itch_mod.MAX_DESCRIPTION_CHARS + 50)).endswith("…")

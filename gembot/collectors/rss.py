@@ -4,10 +4,16 @@ Every enabled entry of ``config/feeds.yaml`` is one unit of work:
 
 1. lint the URL: the RSS.app viewer page (``rss.app/feed/<id>``), JSON feeds and YouTube
    channel pages are not RSS; the error tells the user which URL to paste instead;
-2. conditional GET (ETag / Last-Modified); ``304 Not Modified`` means "nothing new";
-3. parse the body with feedparser as a stream (feedparser never fetches or opens anything);
+2. conditional GET (ETag / Last-Modified); ``304 Not Modified`` means "nothing new". At most
+   one retry and ``MAX_FEED_BYTES`` per body. A host that answers 429 is not asked again this
+   run: its remaining feeds are skipped with one error (many feeds share rss.app);
+3. parse the body with feedparser as a stream (feedparser never fetches or opens anything; its
+   HTML sanitizer and URI resolver are off, they are quadratic on hostile markup and the
+   collector strips tags and resolves links itself);
 4. turn each entry into a :class:`~gembot.models.Mention` whose ``source`` is the platform
    the feed is labelled with (``instagram`` / ``tiktok`` / ``youtube`` / ``rss`` / ...).
+   Text fields are clipped to ``MAX_HTML_CHARS`` and every regex here is linear, so a hostile
+   feed costs time in proportion to its (capped) size. A malformed URL drops that URL only.
 
 These feeds carry little engagement data. RSS.app items have none
 (``extra["engagement_known"] = False``); YouTube feeds expose likes (``media:starRating``)
@@ -30,15 +36,19 @@ import feedparser
 import httpx
 from feedparser.exceptions import ThingsNobodyCaresAboutButMe
 
-from gembot.collectors.base import Collector
+from gembot.collectors.base import CollectContext, Collector
 from gembot.config import FeedConfig
-from gembot.http import HttpError
+from gembot.http import Budget, HttpError, RateLimited
 from gembot.models import Engagement, Mention
 
 MAX_ENTRY_AGE = timedelta(days=30)  # feeds keep old posts around; ignore anything older
 MAX_ENTRIES_PER_FEED = 50
 MAX_ID_LENGTH = 64
 MAX_TEXT_CHARS = 4000
+MAX_FEED_BYTES = 2_000_000  # per feed body; a busy real feed is 50-300 KB
+MAX_HTML_CHARS = 50_000  # per title / summary / content, before any regex work (keeps long posts' links)
+MAX_URL_CHARS = 2048  # longer "URLs" are junk (and would only feed the URL regexes)
+MAX_RETRIES = 1  # per feed request: a slow or rate-limited feed must not eat the run's minutes
 
 # RSS.app often fills dc:creator with the platform name instead of the account.
 GENERIC_AUTHORS = frozenset(
@@ -61,11 +71,18 @@ _PROFILE_RE = re.compile(
 _TITLE_HANDLE_RE = re.compile(r"\(@([\w.]{1,30})\)")
 _HANDLE_RE = re.compile(r"@[\w.]{1,30}")
 
-_SCRIPT_RE = re.compile(r"<(script|style)\b.*?</\1\s*>", re.I | re.S)
+# Every pattern below must stay linear in its input: no lazy ".*?" that can run to the end of
+# the text from each of many start positions (that is O(n^2) on "<!--" or "<script" floods).
+# Character classes stop at the next "<" / ">"; script/style and comments use find loops.
+_RAW_TEXT_OPEN_RE = re.compile(r"<(script|style)\b", re.I)
+_RAW_TEXT_CLOSE_RE = {
+    "script": re.compile(r"</script\s*>", re.I),
+    "style": re.compile(r"</style\s*>", re.I),
+}
 _BLOCK_RE = re.compile(r"<\s*/?\s*(?:br|p|div|li|ul|ol|tr|h[1-6]|blockquote|section|article)\b[^<>]*>", re.I)
-_TAG_RE = re.compile(r"<!--.*?-->|<[/!?]?[A-Za-z][^<>]*>", re.S)  # "<3" is not a tag
-_HREF_RE = re.compile(r"""\bhref\s*=\s*(["'])(.*?)\1""", re.I | re.S)
-_IMG_RE = re.compile(r"""<img\b[^>]*?\bsrc\s*=\s*(["'])(.*?)\1""", re.I | re.S)
+_TAG_RE = re.compile(r"<[/!?]?[A-Za-z][^<>]*>")  # "<3" is not a tag
+_HREF_RE = re.compile(r"""\bhref\s*=\s*(["'])(.*?)\1""", re.I | re.S)  # one long scan per quote kind at most
+_IMG_RE = re.compile(r"""<img\b[^<>]*?\bsrc\s*=\s*(["'])(.*?)\1""", re.I | re.S)
 _URL_RE = re.compile(r"""https?://[^\s<>"'`]+""", re.I)
 # Captions on Instagram / TikTok are not clickable, so people write store links without a scheme.
 _BARE_GAME_URL_RE = re.compile(
@@ -92,6 +109,10 @@ class NotAFeed(ValueError):
 class RssCollector(Collector):
     name = "rss"
 
+    def __init__(self, ctx: CollectContext, budget: Budget | None = None):
+        super().__init__(ctx, budget)
+        self._limited_hosts: set[str] = set()  # hosts that answered 429 this run
+
     def enabled(self) -> tuple[bool, str | None]:
         feeds = self.config.feeds.feeds
         if not feeds:
@@ -101,12 +122,27 @@ class RssCollector(Collector):
         return True, None
 
     def collect(self) -> list[Mention]:
-        for feed in self.config.feeds.feeds:
-            if not feed.enabled:
-                continue
+        feeds = [feed for feed in self.config.feeds.feeds if feed.enabled]
+        for index, feed in enumerate(feeds):
+            host = _host(feed.url)
+            if host in self._limited_hosts:
+                continue  # reported once, when the host answered 429
             with self.guard(f"feed '{feed.name}'"):
                 self.found.extend(self.collect_feed(feed))
+            if host in self._limited_hosts:
+                same_host = [later.name for later in feeds[index + 1 :] if _host(later.url) == host]
+                self._skip_host(host, same_host)
         return self.found
+
+    def _skip_host(self, host: str, names: list[str]) -> None:
+        """One error for every later feed on a host that said 429 (they are not requested)."""
+        if not names:
+            return
+        listed = ", ".join(names)
+        self.report.errors.append(
+            f"{host}: rate limited (HTTP 429); skipped {len(names)} more feed(s) on it this run: {listed}"
+        )
+        self.log.warning("%s: rate limited (429); skipping %s", host, listed)
 
     def collect_feed(self, feed: FeedConfig) -> list[Mention]:
         """Fetch and parse one feed. Raises on lint / HTTP / parse errors (``guard`` records them)."""
@@ -146,9 +182,18 @@ class RssCollector(Collector):
 
     def _fetch(self, url: str) -> httpx.Response:
         try:
-            return self.http.get(url, budget=self.budget, conditional=True, expect=(200,))
+            return self.http.get(
+                url,
+                budget=self.budget,
+                conditional=True,
+                expect=(200,),
+                retries=min(self.http.retries, MAX_RETRIES),
+                max_bytes=min(self.http.max_bytes, MAX_FEED_BYTES),  # streamed: abandoned past the cap
+            )
         except HttpError as exc:
-            if exc.status == 404 and _host(url) in YOUTUBE_HOSTS:
+            if isinstance(exc, RateLimited) or exc.status == 429:
+                self._limited_hosts.add(_host(url))
+            elif exc.status == 404 and _host(url) in YOUTUBE_HOSTS:
                 hint = f"{exc} (YouTube feeds return 404 now and then; retried next run)"
                 raise HttpError(hint, exc.status, exc.url) from exc
             raise
@@ -166,7 +211,10 @@ def check_feed_url(url: str) -> tuple[str, str | None]:
     viewer pages, JSON feeds and YouTube ``@handle`` / ``/c/`` / ``/user/`` pages are errors.
     """
     raw = url.strip()
-    parts = urlsplit(raw)
+    try:
+        parts = urlsplit(raw)
+    except ValueError:  # e.g. "https://[not-an-ip]/feed"
+        raise BadFeedUrl(f"not a valid URL: {raw!r}") from None
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise BadFeedUrl(f"not an http(s) URL: {raw!r}")
     host = _host(raw)
@@ -195,8 +243,12 @@ def parse_feed(body: bytes) -> feedparser.FeedParserDict:
     Malformed XML that still yields entries is accepted (the caller warns about it). A
     well-formed feed with no entries is fine (zero items).
     """
+    if len(body) > MAX_FEED_BYTES:  # HttpClient already stops reading there; this guards other callers
+        raise NotAFeed(f"feed too large ({len(body)} bytes, limit {MAX_FEED_BYTES})")
     # A stream, never bytes/str: feedparser fetches str URLs and tries open() on bytes as a file path.
-    parsed = feedparser.parse(io.BytesIO(body))
+    # Its HTML sanitizer and relative-URI resolver are quadratic on hostile markup (a 128 KB
+    # "<!--" flood takes seconds); _to_text strips tags and _links / _thumbnail resolve links.
+    parsed = feedparser.parse(io.BytesIO(body), sanitize_html=False, resolve_relative_uris=False)
     problem = _bozo_problem(parsed)
     usable = any(e.get("id") or e.get("link") or e.get("title") for e in parsed.entries)
     if usable or (parsed.get("version") and problem is None):
@@ -232,7 +284,8 @@ def entry_to_mention(
     link = _http_url(entry.get("link"))
     site = _http_url(channel.get("link")) or feed.url
     base = link or site
-    title = _one_line(_to_text(str(entry.get("title") or ""), _is_html(entry.get("title_detail"))))
+    title_is_html = _is_html(entry.get("title_detail"))
+    title = _one_line(_to_text(_clip(str(entry.get("title") or ""), title_is_html), title_is_html))
     bodies = _bodies(entry)
     texts = [_to_text(value, is_html) for value, is_html in bodies]
     text = max(texts, key=len, default="")[:MAX_TEXT_CHARS]
@@ -277,8 +330,11 @@ def entry_to_mention(
 def normalize_id(raw: str) -> str:
     """Stable, key-safe id: URLs lose scheme / ``www.`` / trailing slash; long or odd ids are hashed."""
     value = raw.strip()
-    if value.lower().startswith(("http://", "https://")):
-        parts = urlsplit(value)
+    try:
+        parts = urlsplit(value) if value.lower().startswith(("http://", "https://")) else None
+    except ValueError:  # "https://[x]/1" is not a URL: hashed below like any other odd id
+        parts = None
+    if parts is not None:
         host = (parts.hostname or "").removeprefix("www.")
         value = host + parts.path.rstrip("/") + (f"?{parts.query}" if parts.query else "")
     if len(value) > MAX_ID_LENGTH or not _ID_RE.fullmatch(value):
@@ -352,10 +408,12 @@ def _bodies(entry: Mapping[str, Any]) -> list[tuple[str, bool]]:
     """(value, is_html) for the summary/description and every content:encoded / Atom content."""
     out: list[tuple[str, bool]] = []
     if entry.get("summary"):
-        out.append((str(entry["summary"]), _is_html(entry.get("summary_detail"))))
+        is_html = _is_html(entry.get("summary_detail"))
+        out.append((_clip(str(entry["summary"]), is_html), is_html))
     for content in entry.get("content") or []:
         if content.get("value"):
-            out.append((str(content["value"]), _is_html(content)))
+            is_html = _is_html(content)
+            out.append((_clip(str(content["value"]), is_html), is_html))
     return out
 
 
@@ -363,7 +421,7 @@ def _links(link: str | None, bodies: list[tuple[str, bool]], texts: Iterable[str
     found: list[str] = [link] if link else []
     for value, is_html in bodies:
         if is_html:
-            found.extend(urljoin(base, html.unescape(m.group(2).strip())) for m in _HREF_RE.finditer(value))
+            found.extend(_join(base, m.group(2)) for m in _HREF_RE.finditer(value))
     for text in texts:
         found.extend(m.group(0) for m in _URL_RE.finditer(text))
         found.extend("https://" + m.group(0) for m in _BARE_GAME_URL_RE.finditer(text))
@@ -385,7 +443,7 @@ def _thumbnail(entry: Mapping[str, Any], bodies: list[tuple[str, bool]], base: s
         if match:
             candidates.append(match.group(2))
     for candidate in candidates:
-        url = _http_url(urljoin(base, html.unescape(str(candidate).strip()))) if candidate else None
+        url = _http_url(_join(base, str(candidate))) if candidate else None
         if url:
             return url
     return None
@@ -409,14 +467,64 @@ def _is_html(detail: Mapping[str, Any] | None) -> bool:
     return str((detail or {}).get("type") or "text/html").lower() != "text/plain"
 
 
+def _clip(value: str, is_html: bool) -> str:
+    """At most ``MAX_HTML_CHARS``; HTML is cut before a tag the limit would split."""
+    if len(value) <= MAX_HTML_CHARS:
+        return value
+    value = value[:MAX_HTML_CHARS]
+    if is_html:
+        cut = value.rfind("<")
+        if cut > value.rfind(">"):
+            value = value[:cut]
+    return value
+
+
 def _to_text(value: str, is_html: bool) -> str:
     """HTML -> plain text with line breaks kept; plain text only gets its whitespace tidied."""
     if is_html:
-        value = _SCRIPT_RE.sub(" ", value)
+        value = _drop_raw_text(value)
         value = _BLOCK_RE.sub("\n", value)
-        value = html.unescape(_TAG_RE.sub("", value))
+        value = html.unescape(_TAG_RE.sub("", _drop_comments(value)))
     lines = (" ".join(line.split()) for line in value.splitlines())
     return "\n".join(line for line in lines if line)
+
+
+def _drop_raw_text(value: str) -> str:
+    """Replace each ``<script>`` / ``<style>`` element with a space, in one forward pass.
+
+    An element without its closing tag is left as text (and no later one of that kind can
+    close either), which is what the old ``<(script|style)\\b.*?</\\1\\s*>`` regex did too.
+    """
+    out: list[str] = []
+    pos = 0
+    unclosed: set[str] = set()
+    for opened in _RAW_TEXT_OPEN_RE.finditer(value):
+        kind = opened.group(1).lower()
+        if opened.start() < pos or kind in unclosed:
+            continue  # inside an element already dropped, or known to have no closing tag
+        closed = _RAW_TEXT_CLOSE_RE[kind].search(value, opened.end())
+        if closed is None:
+            unclosed.add(kind)
+            continue
+        out.append(value[pos : opened.start()])
+        out.append(" ")
+        pos = closed.end()
+    out.append(value[pos:])
+    return "".join(out)
+
+
+def _drop_comments(value: str) -> str:
+    """Remove ``<!-- ... -->`` in one forward pass; an unclosed ``<!--`` stays as text."""
+    out: list[str] = []
+    pos = 0
+    while (start := value.find("<!--", pos)) >= 0:
+        end = value.find("-->", start + 4)
+        if end < 0:
+            break  # no "-->" anywhere after this, so no later comment closes either
+        out.append(value[pos:start])
+        pos = end + 3
+    out.append(value[pos:])
+    return "".join(out)
 
 
 def _one_line(value: str) -> str:
@@ -424,7 +532,10 @@ def _one_line(value: str) -> str:
 
 
 def _host(url: str) -> str:
-    host = (urlsplit(url.strip()).hostname or "").lower()
+    try:
+        host = (urlsplit(url.strip()).hostname or "").lower()
+    except ValueError:
+        return ""
     for prefix in ("www.", "m."):
         host = host.removeprefix(prefix)
     return host
@@ -434,17 +545,36 @@ def _http_url(value: Any) -> str | None:
     if not value:
         return None
     url = str(value).strip()
-    parts = urlsplit(url)
+    if len(url) > MAX_URL_CHARS:
+        return None
+    try:
+        parts = urlsplit(url)
+    except ValueError:  # "https://[link in bio]" in a caption: drop this URL, keep the post
+        return None
     return url if parts.scheme in ("http", "https") and parts.netloc else None
+
+
+def _join(base: str, href: str) -> str:
+    """``urljoin`` that never raises: a malformed base or href comes back as-is (callers then
+    drop it through ``_http_url``, an absolute href still works with a broken base)."""
+    href = html.unescape(href.strip())
+    try:
+        return urljoin(base, href)
+    except ValueError:
+        return href
 
 
 def _clean_url(url: str) -> str | None:
     url = url.strip()
-    while url and url[-1] in _TRAILING_PUNCT:
-        if url[-1] == ")" and url.count("(") >= url.count(")"):
-            break  # keep balanced parentheses, e.g. wiki/Foo_(game)
-        url = url[:-1]
-    return _http_url(url)
+    opened, closed = url.count("("), url.count(")")  # counted once: ")))..." stays linear
+    end = len(url)
+    while end and url[end - 1] in _TRAILING_PUNCT:
+        if url[end - 1] == ")":
+            if opened >= closed:
+                break  # keep balanced parentheses, e.g. wiki/Foo_(game)
+            closed -= 1
+        end -= 1
+    return _http_url(url[:end])
 
 
 def _first_group(pattern: re.Pattern[str], value: str | None, group: int = 1) -> str | None:

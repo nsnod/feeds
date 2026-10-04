@@ -14,9 +14,11 @@ RSS 2.0, 36 items per page, ``?page=N`` for more. Every ``<item>`` has, in order
 Why ``xml.etree.ElementTree`` and not feedparser: feedparser lowercases the itch-only
 elements, flattens ``<platforms>`` and hides structure behind heuristics. The feed has a
 small fixed schema, so an exact read is simpler and testable. The input is guarded:
-a size cap, documents with a DOCTYPE/ENTITY declaration are refused (no entity expansion,
-no XXE; expat >= 2.4 also caps amplification), the root must be ``<rss>`` and at most
-``MAX_ITEMS_PER_PAGE`` items are read.
+a size cap (enforced while downloading, and again before parsing), the body must be UTF-8,
+documents with a DOCTYPE/ENTITY declaration anywhere are refused (no entity expansion, no
+XXE; expat >= 2.4 also caps amplification), the root must be ``<rss>`` and at most
+``MAX_ITEMS_PER_PAGE`` items are read. Descriptions are clipped before any regex work and
+the regexes stop at the next ``<``/``>``, so hostile markup costs linear time.
 
 Blocking: GitHub runner IPs may get Cloudflare challenges, especially on combined
 sort+tag URLs. A challenge (``cf-mitigated: challenge`` header or a "Just a moment" page)
@@ -58,6 +60,7 @@ MAX_FEED_BYTES = 5_000_000  # a real 36-item page is ~40 KB
 MAX_ITEMS_PER_PAGE = 100
 MAX_TEXT_CHARS = 500
 MAX_NAME_CHARS = 200
+MAX_DESCRIPTION_CHARS = 20_000  # of description HTML read; real ones are < 1 KB, text keeps 500 chars
 CHALLENGE_MARKERS = (b"challenges.cloudflare.com", b"just a moment", b"__cf_chl")
 RESERVED_SUBDOMAINS = frozenset({"www", "api", "static", "img"})
 
@@ -68,10 +71,11 @@ _PRICE_LABEL = re.compile(
     r"^(?:[A-Z]{0,3}[^\w\s\[\]]{1,2}\s?|[A-Z]{3}\s?)?\d+(?:[.,]\d+)?\s?(?:[^\w\s\[\]]{1,2}|[A-Z]{3})?$"
 )
 _PRICE_NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
-_IMG_TAG = re.compile(r"<img\b[^>]*>", re.I)
-_IMG_SRC = re.compile(r"""<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']""", re.I)
-_HTML_TAG = re.compile(r"<[^>]+>")
-_DECLARATION = re.compile(rb"<!DOCTYPE|<!ENTITY", re.I)
+# "[^<>]" (not "[^>]"): with many "<" and no ">" each start would otherwise scan to the end, O(n^2).
+_IMG_TAG = re.compile(r"<img\b[^<>]*>", re.I)
+_IMG_SRC = re.compile(r"""<img\b[^<>]*?\bsrc\s*=\s*["']([^"'<>]+)["']""", re.I)
+_HTML_TAG = re.compile(r"<[^<>]+>")
+_DECLARATION = re.compile(r"<!DOCTYPE|<!ENTITY", re.I)
 _WS = re.compile(r"\s+")
 
 
@@ -192,7 +196,7 @@ def parse_date(text: str | None) -> datetime | None:
 
 def short_text(description_html: str) -> str:
     """Description HTML -> plain text: drop <img>, strip tags, then unescape entities."""
-    text = _IMG_TAG.sub(" ", description_html)
+    text = _IMG_TAG.sub(" ", description_html[:MAX_DESCRIPTION_CHARS])
     text = _HTML_TAG.sub(" ", text)
     text = _WS.sub(" ", html.unescape(text)).strip()
     if len(text) > MAX_TEXT_CHARS:
@@ -247,6 +251,7 @@ def parse_item(element: ET.Element, *, position: int, now: datetime) -> ItchItem
 
     description = fields.get("description")
     description_html = "".join(description.itertext()) if description is not None else ""
+    description_html = description_html[:MAX_DESCRIPTION_CHARS]  # before any regex work
     image = _http_url(text("imageurl"))
     if image is None:
         found = _IMG_SRC.search(description_html)
@@ -287,14 +292,20 @@ def parse_item(element: ET.Element, *, position: int, now: datetime) -> ItchItem
 
 def parse_feed(content: bytes, *, now: datetime) -> ItchPage:
     """Parse one feed page. Raises :class:`ItchFeedError` for anything that is not sane RSS."""
-    if len(content) > MAX_FEED_BYTES:
+    if len(content) > MAX_FEED_BYTES:  # HttpClient already stops reading there; this guards other callers
         raise ItchFeedError(f"feed too large ({len(content)} bytes)")
-    start = content.find(b"<rss")
-    prolog = content[:start] if start >= 0 else content
-    if _DECLARATION.search(prolog):
+    try:
+        document = content.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ItchFeedError(f"feed is not UTF-8 ({exc.reason} at byte {exc.start})") from exc
+    # Searched in the whole document, not just before the first "<rss" (a comment or PI may say
+    # "<rss" before the DTD), and in the decoded text that expat parses below: a str is always
+    # read as UTF-8 whatever the XML declaration says, so a UTF-16 body cannot hide a DOCTYPE
+    # from this check.
+    if _DECLARATION.search(document):
         raise ItchFeedError("refusing XML with a DOCTYPE/ENTITY declaration")
     try:
-        root = ET.fromstring(content)
+        root = ET.fromstring(document)
     except ET.ParseError as exc:
         raise ItchFeedError(f"malformed XML: {exc}") from exc
     if _local(root.tag) != "rss":
@@ -514,7 +525,12 @@ class ItchCollector(Collector):
         params = {"page": str(page_no)} if page_no > 1 else None
         try:
             response = self.http.get(
-                url, budget=self.budget, params=params, headers={"Accept": ACCEPT}, expect=EXPECT
+                url,
+                budget=self.budget,
+                params=params,
+                headers={"Accept": ACCEPT},
+                expect=EXPECT,
+                max_bytes=min(self.http.max_bytes, MAX_FEED_BYTES),  # streamed: abandoned past the cap
             )
         except RateLimited:
             self._halt = "rate limited by itch.io (HTTP 429)"

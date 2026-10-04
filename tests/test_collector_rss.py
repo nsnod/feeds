@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from datetime import UTC, datetime
 
 import httpx
@@ -421,11 +422,11 @@ def test_youtube_404_is_recorded_with_a_hint_and_other_feeds_continue():
 
 
 @respx.mock
-def test_500_is_retried_then_recorded():
+def test_500_is_retried_once_then_recorded():
     route = respx.get(BLOG.url).mock(return_value=httpx.Response(500))
-    mentions, report = run(BLOG)
-    assert mentions == [] and route.call_count == 3  # 1 + 2 retries, all charged to the budget
-    assert report.requests == 3 and "HTTP 500" in report.errors[0]
+    mentions, report = run(BLOG)  # the client default is 2 retries; feeds get MAX_RETRIES = 1
+    assert mentions == [] and route.call_count == 2  # 1 + 1 retry, all charged to the budget
+    assert report.requests == 2 and "HTTP 500" in report.errors[0]
     assert not report.ok and "FAILED" in report.summary()
 
 
@@ -437,11 +438,11 @@ def test_404_on_a_normal_feed_has_no_youtube_hint():
 
 
 @respx.mock
-def test_429_is_retried_then_rate_limited_is_recorded():
+def test_429_is_retried_once_then_rate_limited_is_recorded():
     route = respx.get(IG.url).mock(return_value=httpx.Response(429, headers={"Retry-After": "1"}))
     mentions, report = run(IG)
-    assert mentions == [] and route.call_count == 3
-    assert "rate limited (429)" in report.errors[0]
+    assert mentions == [] and route.call_count == 2
+    assert len(report.errors) == 1 and "rate limited (429)" in report.errors[0]  # no other rss.app feed
 
 
 @respx.mock
@@ -713,3 +714,270 @@ def test_empty_items_are_ignored_and_harmless_encoding_quirks_do_not_warn():
     mentions, report = run(BLOG)
     assert [m.title for m in mentions] == ["Café co-op night"]
     assert report.warnings == [] and report.errors == []
+
+
+# ------------------------------------------------------------------ hostile feeds and hosts (review)
+
+MB = 1 << 20
+
+
+class CountingStream(httpx.SyncByteStream):
+    """A huge body that records how much the client pulled (``tripwire`` keeps the test small
+    even if the code under test never stops reading)."""
+
+    def __init__(self, head: bytes, total: int, *, chunk: int = MB, tripwire: int = 24 * MB):
+        self.head, self.total, self.chunk, self.tripwire = head, total, chunk, tripwire
+        self.pulled = 0
+
+    def __iter__(self):
+        self.pulled += len(self.head)
+        yield self.head
+        while self.pulled < self.total:
+            if self.pulled >= self.tripwire:
+                raise RuntimeError(f"tripwire: client kept reading past {self.pulled} bytes")
+            size = min(self.chunk, self.total - self.pulled)
+            self.pulled += size
+            yield b" " * size
+
+
+class DripStream(httpx.SyncByteStream):
+    """A server that trickles a feed out one byte every ``gap`` seconds."""
+
+    def __init__(self, drips: int, gap: float):
+        self.drips, self.gap = drips, gap
+
+    def __iter__(self):
+        yield b'<?xml version="1.0"?><rss version="2.0"><channel><title>slow</title>'
+        for _ in range(self.drips):
+            time.sleep(self.gap)
+            yield b" "
+        yield b"</channel></rss>"
+
+
+def rssapp_item(title: str, link: str, guid: str, description: str = "") -> str:
+    return (
+        f"<item><title><![CDATA[{title}]]></title><description><![CDATA[{description}]]></description>"
+        f'<link>{link}</link><guid isPermaLink="false">{guid}</guid>'
+        "<dc:creator><![CDATA[Instagram]]></dc:creator><pubDate>Sat, 03 Oct 2026 10:00:00 GMT</pubDate></item>"
+    )
+
+
+def rssapp_feed(*items: str) -> bytes:
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">'
+        "<channel><title><![CDATA[Lighthouse Games (@lighthouse.games) • Instagram photos and videos]]></title>"
+        "<link>https://www.instagram.com/lighthouse.games/</link><generator>RSS.app</generator>"
+        + "".join(items)
+        + "</channel></rss>"
+    ).encode()
+
+
+def blog_feed(description: str, *, title: str = "t") -> bytes:
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>b</title>'
+        f"<link>https://friendslop.example.com/</link><item><title>{title}</title>"
+        "<link>https://friendslop.example.com/p/1</link>"
+        f"<description><![CDATA[{description}]]></description>"
+        "<pubDate>Sat, 03 Oct 2026 10:00:00 GMT</pubDate></item></channel></rss>"
+    ).encode()
+
+
+def transport_for(content: bytes) -> httpx.MockTransport:
+    return httpx.MockTransport(lambda request: xml_response(content))
+
+
+def test_a_host_that_answers_429_is_not_asked_again_this_run():
+    """Ten rss.app feeds used to cost 30 requests (3 attempts each) and 400 s of Retry-After
+    sleeps after the host said "slow down" on the first one."""
+    feeds = [
+        FeedConfig(name=f"IG {i}", url=f"https://rss.app/feeds/Feed{i:02d}AbCdEfGhIj.xml", source="instagram")
+        for i in range(10)
+    ]
+    hosts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hosts.append(request.url.host)
+        if request.url.host == "rss.app":
+            return httpx.Response(429, headers={"Retry-After": "20"})
+        return xml_response(body("generic_blog.rss"))
+
+    sleeps: list[float] = []
+    http = make_http(httpx.MockTransport(handler), sleep=sleeps.append)
+    mentions, report = run(feeds[0], BLOG, *feeds[1:], http=http)
+    assert hosts == ["rss.app", "rss.app", "friendslop.example.com"]  # 1 try + 1 retry, then never again
+    assert sleeps == [20.0]
+    assert len(mentions) == 2 and report.ok and report.ok_units == 1 and report.failed_units == 1
+    skipped = ", ".join(f"IG {i}" for i in range(1, 10))
+    assert report.errors == [
+        "feed 'IG 0': rss: rate limited (429), retry after 20.0s",
+        f"rss.app: rate limited (HTTP 429); skipped 9 more feed(s) on it this run: {skipped}",
+    ]
+
+
+def test_429_that_cannot_be_waited_out_is_not_retried_and_only_stops_its_host():
+    hosts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hosts.append(request.url.host)
+        if request.url.host == "rss.app":
+            return httpx.Response(429, headers={"Retry-After": "600"})
+        return xml_response(body("youtube_channel.xml"))
+
+    mentions, report = run(BLOG, IG, YT, TT, http=make_http(httpx.MockTransport(handler)))
+    assert hosts == ["friendslop.example.com", "rss.app", "www.youtube.com"]
+    assert {m.source for m in mentions} == {"rss", "youtube"}
+    assert report.errors[1].endswith("skipped 1 more feed(s) on it this run: Lighthouse (TikTok)")
+
+
+def test_feed_body_is_capped_while_downloading():
+    """No size cap at all used to let one feeds.yaml URL make the run buffer and parse any size."""
+    stream = CountingStream(b'<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>', 64 * MB)
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, headers={"content-type": "application/rss+xml"}, stream=stream)
+    )
+    mentions, report = run(BLOG, http=make_http(transport))
+    assert mentions == [] and f"larger than {rss_module.MAX_FEED_BYTES} bytes" in report.errors[0]
+    assert stream.pulled <= rss_module.MAX_FEED_BYTES + MB, f"read {stream.pulled / MB:.0f} MB of one feed"
+
+
+def test_parse_feed_refuses_oversized_bodies_too():
+    with pytest.raises(NotAFeed, match="feed too large"):
+        parse_feed(b" " * (rss_module.MAX_FEED_BYTES + 1))
+
+
+def test_a_trickling_server_cannot_hold_the_run_past_the_timeout():
+    """Regression (HttpClient deadline): a byte every 50 ms never trips a 0.25 s read timeout."""
+    http = make_http(
+        httpx.MockTransport(lambda request: httpx.Response(200, stream=DripStream(40, 0.05))), timeout=0.25
+    )
+    started = time.monotonic()
+    _mentions, report = run(BLOG, http=http)
+    elapsed = time.monotonic() - started
+    assert elapsed < 1.5, f"one feed request took {elapsed:.1f}s with timeout=0.25s"
+    assert "too slow" in report.errors[0]
+
+
+def test_caption_with_bracketed_placeholder_url_keeps_the_post():
+    """``https://[link in bio]``: urlsplit() raises ValueError('Invalid IPv6 URL'), which used to
+    drop the whole post as an "unreadable entry"."""
+    content = rssapp_feed(
+        rssapp_item(
+            "Wishlist now: https://[link in bio] #coop #indiegame",
+            "https://www.instagram.com/p/DAbCdEfGhIj",
+            "3f2b8c1d9e7a4b6c8d0e1f2a3b4c5d6e",
+            "<div>Wishlist now: https://[link in bio] #coop</div>",
+        ),
+        rssapp_item(
+            "Devlog 12 is up", "https://www.instagram.com/p/DXyZ0123456", "9a8b7c6d5e4f30211234567890abcdef"
+        ),
+    )
+    mentions, report = run(IG, http=make_http(transport_for(content)))
+    assert sorted(m.source_id for m in mentions) == ["DAbCdEfGhIj", "DXyZ0123456"], report.warnings
+    assert report.warnings == []
+    wishlist = next(m for m in mentions if m.source_id == "DAbCdEfGhIj")
+    assert wishlist.links == ["https://www.instagram.com/p/DAbCdEfGhIj"]
+    assert wishlist.raw_tags == ["coop", "indiegame"]
+
+
+def test_malformed_urls_drop_only_themselves():
+    entry = {
+        "title": "Wishlist: https://[link in bio] #coop",
+        "id": "https://[guid]/post/1",
+        "link": "https://[bad-link]/p",
+        "summary": (
+            "<a href='https://[x]/a'>x</a> <a href='/ok'>ok</a> https://[y <img src='https://[z]/i.png'>"
+        ),
+        "media_thumbnail": [{"url": "https://[thumb]/t.jpg"}],
+    }
+    mention = entry_to_mention(entry, {"link": "https://[channel]/"}, BLOG, now=NOW)
+    assert mention.url == BLOG.url  # neither the entry nor the channel link is usable
+    assert mention.links == ["https://friendslop.example.com/ok"]
+    assert mention.media_thumb is None
+    assert mention.source_id == hashlib.sha1(b"https://[guid]/post/1").hexdigest()[:16]
+    assert mention.raw_tags == ["coop"]
+
+    # a broken base (only possible when entry_to_mention is called directly) keeps absolute links
+    broken = FeedConfig(name="broken", url="https://[feed]/rss")
+    entry = {"title": "x", "summary": "<a href='https://ok.example.com/a'>a</a><a href='/rel'>r</a>"}
+    mention = entry_to_mention(entry, {}, broken, now=NOW)
+    assert mention.links == ["https://ok.example.com/a"] and mention.url == broken.url
+
+    too_long = "https://b.example.com/" + "a" * rss_module.MAX_URL_CHARS
+    mention = entry_to_mention({"title": "long", "link": too_long}, {}, BLOG, now=NOW)
+    assert mention.url == BLOG.url and mention.links == []
+
+    assert normalize_id("https://[x]/1") == hashlib.sha1(b"https://[x]/1").hexdigest()[:16]
+    assert rss_module._host("https://[x]/") == ""
+    with pytest.raises(BadFeedUrl, match="not a valid URL"):
+        check_feed_url("https://[x]/feed.xml")
+
+
+def test_malformed_feed_url_is_a_lint_error_and_other_feeds_still_run():
+    bad = FeedConfig(name="typo", url="https://[rss.app/feeds/AbCd.xml")
+    mentions, report = run(bad, BLOG, http=make_http(transport_for(body("generic_blog.rss"))))
+    assert len(mentions) == 2 and report.ok_units == 1 and report.failed_units == 1
+    assert report.errors == ["feed 'typo': BadFeedUrl: not a valid URL: 'https://[rss.app/feeds/AbCd.xml'"]
+
+
+def test_feedparser_sanitizer_is_off_and_a_comment_flood_is_cheap():
+    """feedparser's sanitizer is quadratic on comment floods (128 KB took 1.7 s, 1 MB ~100 s) and
+    so was the old comment regex here. 160 KB (old: well over 10 s, now ~20 ms) is far below the cap."""
+    content = blog_feed("Hello <b>co-op</b> fans " + "<!--" * 40_000)
+    started = time.monotonic()
+    mentions, report = run(BLOG, http=make_http(transport_for(content)))
+    elapsed = time.monotonic() - started
+    assert elapsed < 1.0, f"a 160 KB feed took {elapsed:.2f}s to collect"
+    assert report.errors == [] and mentions[0].text.startswith("Hello co-op fans <!--")
+
+
+@pytest.mark.parametrize(
+    "flood",
+    ["<!--", "<script ", "<style><script>", "<img ", "<a ", "<p ", '<img src="', "href='x\" "],
+)
+def test_html_to_text_and_link_extraction_are_linear(flood):
+    """The helpers run on unclipped 60 KB here (entries are clipped to MAX_HTML_CHARS first). The
+    old lazy ".*?" / "[^>]*" patterns took 1.5-6 s on the first four floods; now ~10 ms each."""
+    value = flood * (60_000 // len(flood))
+    started = time.monotonic()
+    rss_module._to_text(value, True)
+    rss_module._links(None, [(value, True)], [value], "https://b.example.com/")
+    rss_module._IMG_RE.search(value)
+    elapsed = time.monotonic() - started
+    assert elapsed < 0.5, f"{flood!r} x {len(value) // len(flood)} took {elapsed:.2f}s"
+
+
+def test_trailing_punctuation_cleanup_is_linear():
+    started = time.monotonic()  # old: one str.count per stripped ")" (1.3 s here)
+    assert rss_module._clean_url("https://a.example.com/" + ")" * 60_000) == "https://a.example.com/"
+    assert time.monotonic() - started < 0.5
+    assert rss_module._clean_url("https://a.example.com/x_(y)).") == "https://a.example.com/x_(y)"
+
+
+def test_script_style_and_comment_stripping_keeps_its_old_behaviour():
+    to_text = rss_module._to_text
+    assert to_text("a<script>x</script>b<style>y</STYLE >c", True) == "a b c"
+    assert to_text("<script>a<script>b</script>c", True) == "c"  # the first closing tag ends it
+    # without a closing tag the element is kept as text (tags stripped), later ones still go
+    assert to_text("a<script>never closed<script>x<style>s</style>b", True) == "anever closedx b"
+    assert to_text("a<!-- <p>x</p> -->b<!-- open", True) == "ab<!-- open"
+    assert to_text("<!---->x<!-- a --><!-- b -->y", True) == "xy"
+
+
+def test_long_fields_are_clipped_before_regex_work():
+    limit = rss_module.MAX_HTML_CHARS
+    clip = rss_module._clip
+    assert clip("short", True) == "short"
+    html_value = "x" * (limit - 5) + "<a href='https://b.example.com/'>tail</a>"
+    assert clip(html_value, True) == "x" * (limit - 5)  # no half tag left behind
+    closed = "<b>" + "y" * limit
+    assert clip(closed, True) == closed[:limit]
+    assert clip("z" * (limit + 10), False) == "z" * limit
+
+    entry = {
+        "title": "t" * (limit + 10),
+        "link": "https://b.example.com/post",
+        "summary": "<p>" + "w " * limit + "</p><a href='https://late.example.com/'>late</a>",
+    }
+    mention = entry_to_mention(entry, {}, BLOG, now=NOW)
+    assert len(mention.title) == limit and len(mention.text) == rss_module.MAX_TEXT_CHARS
+    assert mention.links == ["https://b.example.com/post"]  # the href past the limit is not read
