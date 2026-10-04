@@ -259,16 +259,17 @@ and the learned values are kept in the state; once a week `#gembot-status` tells
   - if a scan takes 61–120 seconds, it's ~2,900 minutes — the free quota runs out around day 21
     (with a payment method, the extra ≈ 900 min × $0.006 ≈ **$5–6/month**; without one, Actions
     pauses until the 1st).
-  - **Run time (measured on the first smoke run, 4 Oct 2026):** about **105 seconds** of
-    scanning (mostly Steam's polite 2-second pauses: ~60 s collecting, ~30 s reading store
-    details for the shortlist) **plus ~15 seconds** of job setup, so a scan job takes about
-    2 minutes and bills **2 minutes**. That does *not* fit in 2,000 free minutes at 48 runs a
-    day. On a private repo, either scan hourly (change the `cron` line in
-    `.github/workflows/scan.yml` to `"7 * * * *"`: ~1,490 minutes/month) or lower
-    `steam.max_new_apps_per_run` / Steam `max_pages` in `config/sources.yaml`. Check yours:
-    open any **GemBot scan** run (the duration is shown at the top) or run the **Smoke test**,
-    whose summary prints the time. Hard limits: sources stop after 3 minutes, enrichment after
-    5, and the job is cancelled at 8.
+  - **Run time (measured on the first live runs, 4 Oct 2026):** **105–135 seconds** of
+    scanning, nearly all of it Steam's polite 2-second pause between requests (up to 60 Steam
+    requests a run: ~60 s of listings, then store details for the shortlist), **plus ~15
+    seconds** of job setup. A scan job takes 2–2.5 minutes and bills **2–3 minutes**, which
+    does *not* fit in 2,000 free minutes at 48 runs a day. On a private repo, either scan every
+    2 hours (change the `cron` line in `.github/workflows/scan.yml` to `"7 */2 * * *"`: ~370
+    runs ≈ 1,100 minutes/month), or lower `budgets.steam` in `config/settings.yaml` (each 10
+    fewer Steam requests saves ~20 s) until jobs stay under 2 minutes and scan hourly
+    (`"7 * * * *"`: ~1,490 minutes). Check yours: open any **GemBot scan** run (the duration is
+    shown at the top) or run the **Smoke test**, whose summary prints the time. Hard limits:
+    sources stop after 3 minutes, enrichment after 5, and the job is cancelled at 8.
 - Optional paid extras: X (see [above](#x-paid)), Claude (tiny), RSS.app beyond 2 feeds.
 
 ---
