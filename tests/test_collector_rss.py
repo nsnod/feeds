@@ -1177,3 +1177,148 @@ def test_a_304_is_ok_with_a_note():
         FeedResult(IG.name, "instagram", "ok", items=0, note="nothing new since the last run (HTTP 304)")
     ]
     assert report.ok and report.errors == []
+
+
+# ------------------------------------------------------------------ URLs that can never work, checked up front
+
+VIEWER = FeedConfig(name="Viewer", url="https://rss.app/feed/AbCdEfGhIjKlMnOp", source="instagram")
+VIEWER_PROBLEM = (
+    "config/feeds.yaml: feed 'Viewer': use the https://rss.app/feeds/AbCdEfGhIjKlMnOp.xml RSS URL (got "
+    "https://rss.app/feed/AbCdEfGhIjKlMnOp)"
+)
+
+
+def _stopped_by_429() -> RssCollector:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "/feed/" not in request.url.path, "a URL that can never work is never requested"
+        if request.url.host == "rss.app":
+            return httpx.Response(429, headers={"Retry-After": "600"})
+        return xml_response(body("youtube_channel.xml"))
+
+    return collector_for(Feeds(feeds=[IG, VIEWER, YT]), http=make_http(httpx.MockTransport(handler)))
+
+
+def _out_of_requests() -> RssCollector:
+    return collector_for(Feeds(feeds=[IG, VIEWER, YT]), budget=Budget("rss", 0))
+
+
+def _out_of_time() -> RssCollector:
+    budget = Budget("rss", 50)
+    budget.deadline = time.monotonic() - 1
+    return collector_for(Feeds(feeds=[IG, VIEWER, YT]), budget=budget)
+
+
+@pytest.mark.parametrize(
+    ("collector", "statuses"),
+    [
+        (_stopped_by_429, ["error", "config", "ok"]),
+        (_out_of_requests, ["skipped", "config", "skipped"]),
+        (_out_of_time, ["skipped", "config", "skipped"]),
+    ],
+)
+def test_a_bad_url_is_a_config_problem_on_every_run_even_when_the_run_stops_before_it(collector, statuses):
+    """The URL check ran only for feeds the loop reached: after rss.app said 429 (or the budget or
+    the clock ran out), a bad URL further down was missing from that run's mistakes, so the status
+    channel said "rss is working again" and later "still failing" without any edit."""
+    _, report = collector().run()
+    assert report.config_problems == [VIEWER_PROBLEM] and not report.ok
+    assert [row.status for row in report.feed_results] == statuses
+    assert report.feed_results[1].note.startswith(
+        "use the https://rss.app/feeds/AbCdEfGhIjKlMnOp.xml RSS URL"
+    )
+
+
+@pytest.mark.parametrize(
+    ("url", "message"),
+    [
+        (
+            "rss.app/feeds/AbCdEfGhIjKlMnOp.xml",
+            "not an http(s) URL: add https:// in front - use https://rss.app/feeds/AbCdEfGhIjKlMnOp.xml (got "
+            "rss.app/feeds/AbCdEfGhIjKlMnOp.xml)",
+        ),
+        (
+            "www.youtube.com/feeds/videos.xml?channel_id=UCabcdefghijklmnopqrstuv",
+            "not an http(s) URL: add https:// in front - use https://www.youtube.com/feeds/videos.xml?channel_id="
+            "UCabcdefghijklmnopqrstuv (got www.youtube.com/feeds/videos.xml?channel_id=UCabcdefghijklmnopqrstuv)",
+        ),
+        (  # the viewer page without https://: the .xml URL to use, about the URL as written
+            "rss.app/feed/AbCdEfGhIjKlMnOp",
+            "use the https://rss.app/feeds/AbCdEfGhIjKlMnOp.xml RSS URL (got rss.app/feed/AbCdEfGhIjKlMnOp)",
+        ),
+        (
+            "https//rss.app/feeds/AbCdEfGhIjKlMnOp.xml",
+            "not an http(s) URL: the start must be exactly https:// - use "
+            "https://rss.app/feeds/AbCdEfGhIjKlMnOp.xml (got https//rss.app/feeds/AbCdEfGhIjKlMnOp.xml)",
+        ),
+        (  # what an iPhone keyboard makes of url: "https://..."
+            "“https://rss.app/feeds/AbCdEfGhIjKlMnOp.xml”",
+            'replace the curly quotes with straight ones, like url: "https://..." (got '
+            "“https://rss.app/feeds/AbCdEfGhIjKlMnOp.xml”)",
+        ),
+        (
+            "‘https://rss.app/feeds/AbCdEfGhIjKlMnOp.xml’",
+            "replace the curly quotes with straight ones",
+        ),
+        (
+            "https://rss.app/feeds/AbCdEfGh IjKlMnOp.xml",
+            "there is a space inside the URL: delete it (got 'https://rss.app/feeds/AbCdEfGh IjKlMnOp.xml')",
+        ),
+        ("https:// rss.app/feeds/AbCdEfGhIjKlMnOp.xml", "there is a space inside the URL: delete it"),
+        (
+            "ftp://files.example.com/feed.xml",
+            "not an http(s) URL: feeds are read over https://, use the feed's https:// address (got "
+            "'ftp://files.example.com/feed.xml')",
+        ),
+        (
+            "GameGil",
+            "not an http(s) URL: put the feed's full address here, starting with https:// (got 'GameGil')",
+        ),
+        ("https://", "not an http(s) URL: put the feed's full address here, starting with https://"),
+    ],
+)
+def test_a_url_that_is_not_http_says_what_to_change(url, message):
+    with pytest.raises(BadFeedUrl) as caught:
+        check_feed_url(url)
+    assert str(caught.value).startswith(message)
+
+
+RSS_APP_ADVICE = (
+    'make an RSS.app feed for that account (README: "Add Instagram, TikTok and YouTube feeds") and put its '
+    "https://rss.app/feeds/....xml URL here"
+)
+
+
+@pytest.mark.parametrize(
+    ("url", "message"),
+    [
+        (
+            "https://www.instagram.com/hellmeitv/",
+            f"this is an Instagram profile page, not a feed: {RSS_APP_ADVICE}",
+        ),
+        (
+            "https://instagram.com/p/C1234abcd/",
+            f"this is an Instagram post page, not a feed: {RSS_APP_ADVICE}",
+        ),
+        ("instagram.com/hellmeitv", f"this is an Instagram profile page, not a feed: {RSS_APP_ADVICE}"),
+        ("https://www.tiktok.com/@hellmeitv", f"this is a TikTok profile page, not a feed: {RSS_APP_ADVICE}"),
+        ("https://m.tiktok.com/@a/video/123", f"this is a TikTok post page, not a feed: {RSS_APP_ADVICE}"),
+        ("https://x.com/somestudio", f"this is an X profile page, not a feed: {RSS_APP_ADVICE}"),
+        ("https://mobile.twitter.com/a/status/1", f"this is an X post page, not a feed: {RSS_APP_ADVICE}"),
+        (
+            "https://bsky.app/profile/somestudio.bsky.social",
+            "this is a Bluesky profile page, not a feed: use https://bsky.app/profile/somestudio.bsky.social/rss "
+            "(Bluesky's own feed of that account) (got https://bsky.app/profile/somestudio.bsky.social)",
+        ),
+    ],
+)
+def test_a_profile_or_post_page_is_not_a_feed(url, message):
+    """README step 2 has people copy the account's address; pasted into feeds.yaml it passed
+    check-config and only ever failed as "got an HTML page", never reaching #gembot-status."""
+    with pytest.raises(BadFeedUrl) as caught:
+        check_feed_url(url)
+    assert str(caught.value).startswith(message)
+
+
+def test_a_bluesky_accounts_own_feed_is_a_feed():
+    url = "https://bsky.app/profile/somestudio.bsky.social/rss"
+    assert check_feed_url(url) == (url, None)

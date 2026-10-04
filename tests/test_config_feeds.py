@@ -10,7 +10,7 @@ import pytest
 
 from gembot.collectors.rss import BadFeedUrl, check_feed_url
 from gembot.config import ConfigError, Feeds, load_config, load_feeds
-from tests.factories import INCIDENT_FEEDS
+from tests.factories import INCIDENT_FEEDS, ROOT
 
 
 def feeds_from(tmp_path, text: str) -> Feeds:
@@ -250,11 +250,19 @@ B = "{name: b, url: 'https://b.example/x.xml'}"
             ],
         ),
         (
-            f"feeds:\n  - {A}\nfeeds:\n  name: b\n",
+            f"feeds:\n  - {A}\nfeeds:\n  name: b\n",  # a feed without its "- ": named, so it is not lost
+            ["a"],
+            [
+                "line 3: an extra 'feeds:' line with a feed under it that has no '- ' in front ('b'); not read - "
+                "move it into the list under line 1 and put '- ' before its 'name:', then delete that 'feeds:' line"
+            ],
+        ),
+        (
+            f"feeds:\n  - {A}\nfeeds:\n  enabled: false\n",
             ["a"],
             [
                 "line 3: an extra 'feeds:' line that is not a list (found a group of settings); ignored - delete "
-                "line 3 and keep the one on line 1"
+                "line 3 and the lines under it, and keep the one on line 1"
             ],
         ),
         (
@@ -442,7 +450,7 @@ def test_entries_that_are_not_feeds_are_skipped_by_position(tmp_path):
         f"line 4: feeds entry #3 is the text 'just a url', {tail}",
         f"line 7: feeds entry #5 is a list, {tail}",
         f"line 8: feeds entry #6 is the word true, {tail}",
-        f"line 9: feeds entry #7 is a date, {tail}",
+        f"line 9: feeds entry #7 is the text '2026-10-04', {tail}",  # dates stay text in feeds.yaml
         f"line 10: feeds entry #8 is the text '{'x' * 58}…, {tail}",  # long values are shortened
     ]
 
@@ -557,8 +565,14 @@ def test_follower_counts_are_read_the_way_profiles_show_them(tmp_path, written, 
     ("field", "problem"),
     [
         ("audience: lots", "'audience' must be a whole number like 25000 (got 'lots')"),
-        ("audience: 8.357", "'audience' must be a whole number like 25000 (got 8.357)"),
+        ("audience: 1.5", "'audience' must be a whole number like 25000 (got 1.5)"),
+        ("audience: 8.35", "'audience' must be a whole number like 25000 (got 8.35)"),  # not 3 digits
         ("audience: [1, 2]", "'audience' must be a whole number like 25000 (got a list)"),
+        # pydantic alone would read these as 1, -5 and 0 without a word
+        ("audience: true", "'audience' must be a whole number like 25000 (got the word true)"),
+        ("audience: -5", "'audience' must be a follower count of 1 or more (got -5)"),
+        ("audience: 0", "'audience' must be a follower count of 1 or more (got 0)"),
+        ("audience: '-1.2M'", "'audience' must be a whole number like 25000 (got '-1.2M')"),
         ("source:", "'source' is empty"),
         ("source: 7", "'source' must be text (put it in quotes) (got 7)"),
     ],
@@ -572,23 +586,57 @@ def test_a_bad_optional_value_is_left_out_and_the_feed_still_loads(tmp_path, fie
 
 
 @pytest.mark.parametrize(
-    ("written", "read_as", "advice"),
+    ("written", "read_as"),
     [
-        ("yotube", "youtube", "fix the spelling"),
-        ("instagarm", "instagram", "fix the spelling"),
-        ("TikTk", "tiktok", "fix the spelling"),
-        ("facebook", "rss", "use instagram, tiktok, youtube or rss"),
+        ("yotube", "youtube"),
+        ("youtub", "youtube"),
+        ("instagarm", "instagram"),
+        ("instgarm", "instagram"),  # two slips in a long word
+        ("TikTk", "tiktok"),
+        ("tiktock", "tiktok"),
+        ("Tik Tok", "tiktok"),
+        ("r-s-s", "rss"),
     ],
 )
-def test_a_misspelled_source_is_read_as_the_platform_it_means(tmp_path, written, read_as, advice):
+def test_a_misspelled_source_is_read_as_the_platform_it_means(tmp_path, written, read_as):
     feeds = feeds_from(
         tmp_path, f"feeds:\n  - name: K\n    url: https://a.example/x.xml\n    source: {written}\n"
     )
     assert [f.source for f in feeds.feeds] == [read_as]
     assert feeds.problems == [
         f"line 4: feed #1 \"K\": source '{written.lower()}' is not a platform GemBot knows; read as "
-        f"'{read_as}' - {advice}"
+        f"'{read_as}' - fix the spelling"
     ]
+
+
+@pytest.mark.parametrize(
+    "written",
+    [  # near other platforms (difflib read these as itch / steam / reddit), or not a typo at all
+        *("twitch", "twitch.tv", "switch", "glitch", "stitch", "stream", "streamer", "site", "item"),
+        *("steamdb", "reddit rss", "facebook", "blog", "podcast", "rs", "rsss", "youtube music", "x.com"),
+    ],
+)
+def test_any_other_source_is_kept_as_written_without_a_problem(tmp_path, written):
+    """Only a close typo of instagram / tiktok / youtube / rss is corrected; a feed is never turned
+    into another platform (a Twitch feed read as itch made every post title a game)."""
+    feeds = feeds_from(
+        tmp_path, f"feeds:\n  - name: K\n    url: https://a.example/x.xml\n    source: {written}\n"
+    )
+    assert [f.source for f in feeds.feeds] == [written.lower()] and feeds.problems == []
+
+
+def test_a_platform_added_in_settings_matches_in_any_case(tmp_path):
+    (tmp_path / "feeds.yaml").write_text(
+        "feeds:\n  - {name: a, url: 'https://a.example/a.xml', source: twitch}\n"
+        "  - {name: b, url: 'https://a.example/b.xml', source: YouTub}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "settings.yaml").write_text(
+        "features:\n  default_baseline_eph: {Twitch: 4.0, youtub: 2.0}\n", encoding="utf-8"
+    )
+    config = load_config(tmp_path, env={})
+    assert config.feeds.problems == []  # used to be "read as 'Twitch' - fix the spelling", every run
+    assert [f.source for f in config.feeds.feeds] == ["twitch", "youtub"]  # declared: not a typo
 
 
 def test_every_platform_gembot_scores_and_any_added_in_settings_is_a_known_source(tmp_path):
@@ -612,3 +660,285 @@ def test_problems_are_sorted_by_line(tmp_path):
     )
     lines = [int(problem.split(":")[0].removeprefix("line ")) for problem in feeds.problems]
     assert lines == sorted(lines) == [2, 3, 4, 5]
+
+
+# ----------------------------------------------------------------------------- a feed typed without its "- "
+
+# REAL_FEEDS with a fourth feed pasted under KreekCraft without its leading "- " (line 15)
+NO_DASH = REAL_FEEDS + (
+    '    name: "Tiny Pixel (YouTube)"\n'
+    '    url: "https://www.youtube.com/feeds/videos.xml?channel_id=UCabcdefghijklmnopqrstuv"\n'
+    "    source: youtube\n"
+)
+MISSING_DASH = (
+    "line 15: a new feed starts on line 15 but is missing '- ' before 'name:' - add it, in line with the '- ' "
+    "of the feed above"
+)
+
+
+def test_a_feed_typed_without_its_dash_still_loads_and_the_dash_is_named(tmp_path):
+    """Its keys repeat the feed above; keeping only the first of each lost the new feed and said
+    "remove the extra line" three times (doing that deleted the new feed for good)."""
+    feeds = feeds_from(tmp_path, NO_DASH)
+    assert [f.name for f in feeds.feeds] == [*REAL_NAMES, "Tiny Pixel (YouTube)"]
+    assert feeds.feeds[2].url.endswith("=UCxsk7hqE_CwZWGEJEkGanbA")  # KreekCraft keeps its own url
+    assert feeds.feeds[3].url.endswith("=UCabcdefghijklmnopqrstuv") and feeds.feeds[3].source == "youtube"
+    assert feeds.problems == [MISSING_DASH]
+    lines = NO_DASH.splitlines(keepends=True)
+    lines[14] = "  - " + lines[14][4:]  # what the problem says
+    fixed = feeds_from(tmp_path, "".join(lines))
+    assert [f.name for f in fixed.feeds] == [f.name for f in feeds.feeds] and fixed.problems == []
+
+
+def test_a_new_feed_without_its_dash_takes_the_keys_typed_above_its_name(tmp_path):
+    feeds = feeds_from(
+        tmp_path,
+        "feeds:\n  - name: A\n    url: https://a.example/a.xml\n    source: instagram\n"
+        "    url: https://b.example/b.xml\n    name: B\n    source: youtube\n    name: C\n",
+    )
+    assert [(f.name, f.url, f.source) for f in feeds.feeds] == [
+        ("A", "https://a.example/a.xml", "instagram"),
+        ("B", "https://b.example/b.xml", "youtube"),
+    ]
+    assert feeds.problems == [
+        "line 5: a new feed starts on line 5 but is missing '- ' before 'url:' - add it, in line with the '- ' "
+        "of the feed above",
+        "line 8: a new feed starts on line 8 but is missing '- ' before 'name:' - add it, in line with the '- ' "
+        "of the feed above",
+        "line 8: feed #3 \"C\" skipped: 'url' is missing",
+    ]
+    assert not any("remove the extra line" in problem for problem in feeds.problems)
+
+
+# ----------------------------------------------------------------------------- extra "feeds:" lines, advice followed
+
+LEFT_EDGE = (  # the second list starts at the left edge, the first is indented
+    'feeds:\n  - name: "A"\n    url: "https://a.example/a.xml"\nfeeds:\n- name: "B"\n  url: "https://b.example/b.xml"\n'
+)
+
+
+@pytest.mark.parametrize(
+    ("text", "problem", "fixed"),
+    [
+        (
+            LEFT_EDGE,
+            "line 4: a second 'feeds:' line (the first is on line 1); what is under it was read as more feeds - "
+            "delete line 4 and add 2 spaces at the start of each line under it, so its '- ' lines up with the "
+            "ones under line 1",
+            without_lines(LEFT_EDGE, 4).replace('- name: "B"\n  url', '  - name: "B"\n    url'),
+        ),
+        (
+            'feeds:\n- name: "A"\n  url: "https://a.example/a.xml"\nfeeds:\n  - name: "B"\n    url: "https://b.example/b.xml"\n',
+            "line 4: a second 'feeds:' line (the first is on line 1); what is under it was read as more feeds - "
+            "delete line 4 and remove 2 spaces from the start of each line under it, so its '- ' lines up with "
+            "the ones under line 1",
+            'feeds:\n- name: "A"\n  url: "https://a.example/a.xml"\n- name: "B"\n  url: "https://b.example/b.xml"\n',
+        ),
+        (  # the first feed typed without "- ": it used to be dropped without a word
+            'feeds:\n  name: "A"\n  url: "https://a.example/a.xml"\nfeeds:\n  - name: "B"\n    url: "https://b.example/b.xml"\n',
+            "line 1: an extra 'feeds:' line with a feed under it that has no '- ' in front ('A'); not read - move "
+            "it into the list under line 4 and put '- ' before its 'name:', then delete that 'feeds:' line",
+            'feeds:\n  - name: "B"\n    url: "https://b.example/b.xml"\n  - name: "A"\n    url: "https://a.example/a.xml"\n',
+        ),
+        (  # a bare URL under a 'feeds:' line: it used to be called "no feed in it"
+            "feeds:\n  - https://www.youtube.com/feeds/videos.xml?channel_id=UCxsk7hqE_CwZWGEJEkGanbA\n"
+            'feeds:\n  - name: "B"\n    url: "https://b.example/b.xml"\n',
+            "line 1: an extra 'feeds:' line with a URL under it but no feed ('https://www.youtube.com/feeds/videos."
+            "xml?channel_id=UCxsk7…); not read - move it into the list under line 3 as a feed ('- name: ...' with "
+            "'url: ...' on the line below), then delete that 'feeds:' line",
+            'feeds:\n  - name: "B"\n    url: "https://b.example/b.xml"\n  - name: "A"\n'
+            "    url: https://www.youtube.com/feeds/videos.xml?channel_id=UCxsk7hqE_CwZWGEJEkGanbA\n",
+        ),
+        (  # deleting a flow list's line would delete its feeds
+            'feeds:\n  - name: "A"\n    url: "https://a.example/a.xml"\nfeeds: [{name: B, url: "https://b.example/b.xml"}]\n',
+            "line 4: a second 'feeds:' line (the first is on line 1); what is under it was read as more feeds - "
+            "move the feeds on line 4 into the list under line 1, then delete that 'feeds:' line",
+            'feeds:\n  - name: "A"\n    url: "https://a.example/a.xml"\n  - {name: B, url: "https://b.example/b.xml"}\n',
+        ),
+    ],
+)
+def test_the_advice_for_an_extra_feeds_line_keeps_every_feed(tmp_path, text, problem, fixed):
+    """'delete line N' alone broke these files (no feed at all); the advice now keeps every feed."""
+    feeds = feeds_from(tmp_path, text)
+    assert feeds.problems == [problem]
+    after = feeds_from(tmp_path, fixed)
+    assert sorted(f.name for f in after.feeds) == ["A", "B"] and after.problems == []
+
+
+def test_a_list_after_another_key_is_moved_not_joined_by_deleting_its_line(tmp_path):
+    text = (
+        'feeds:\n  - {name: A, url: "https://a.example/a.xml"}\nfoo: 1\nfeeds:\n'
+        '  - {name: B, url: "https://b.example/b.xml"}\n'
+    )
+    feeds = feeds_from(tmp_path, text)
+    assert [f.name for f in feeds.feeds] == ["A", "B"]
+    assert feeds.problems[1] == (
+        "line 4: a second 'feeds:' line (the first is on line 1); what is under it was read as more feeds - "
+        "move the feeds under line 4 into the list under line 1, then delete that 'feeds:' line"
+    )
+    assert "not valid YAML" in feeds_from(tmp_path, without_lines(text, 4)).problems[0]  # why not "delete"
+
+
+# ----------------------------------------------------------------------------- the same feed twice
+
+
+def test_the_same_feed_url_twice_is_read_once_and_both_entries_are_named(tmp_path):
+    """A copied entry with a new name and source but the old url showed as a working feed and
+    counted every post on two platforms."""
+    copy = REAL_FEEDS + (
+        '\n  - name: "NewCreator (TikTok)"\n    url: "https://rss.app/feeds/K1vwmXudAkt1exqO.xml"\n'
+        "    source: tiktok\n"
+    )
+    feeds = feeds_from(tmp_path, copy)
+    assert [f.name for f in feeds.feeds] == REAL_NAMES
+    assert feeds.problems == [
+        'line 17: feed #4 "NewCreator (TikTok)": same url as feed #1 "GameGil (@officialgamegil)" (line 3), so '
+        "it is not read twice - put this feed's own URL here"
+    ]
+    exact = REAL_FEEDS + (  # http / www. / case of the host / trailing "/" make no difference
+        '\n  - name: "GameGil (@officialgamegil)"\n    url: "http://www.RSS.app/feeds/K1vwmXudAkt1exqO.xml/"\n'
+        "    source: instagram\n"
+    )
+    feeds = feeds_from(tmp_path, exact)
+    assert [f.name for f in feeds.feeds] == REAL_NAMES
+    assert feeds.problems == [
+        'line 17: feed #4 "GameGil (@officialgamegil)": the same feed as feed #1 "GameGil (@officialgamegil)" '
+        "(line 3); read once - delete one of the two"
+    ]
+
+
+def test_a_paused_copy_or_another_feed_id_is_not_a_duplicate(tmp_path):
+    text = REAL_FEEDS + (
+        '  - name: "Old GameGil"\n    url: "https://rss.app/feeds/K1vwmXudAkt1exqO.xml"\n    enabled: false\n'
+        '  - name: "Other"\n    url: "https://rss.app/feeds/k1vwmxudakt1exqo.xml"\n'  # ids are case-sensitive
+    )
+    feeds = feeds_from(tmp_path, text)
+    assert [f.name for f in feeds.feeds] == [*REAL_NAMES, "Old GameGil", "Other"] and feeds.problems == []
+
+
+# ----------------------------------------------------------------------------- odd values never lose the file
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "name: 2026-02-30",  # PyYAML turns dates into date objects, and raises on impossible ones
+        "name: 2026-13-01",
+        "name: 2026-10-04 23:99:00",
+        "audience: 2026-02-30",
+        "name: !!timestamp 2026-99-99",
+        "name: !!float abc",
+        "audience: !!int x",
+        "enabled: !!bool x",
+        "url: !!seq x",
+        "name: !!map x",
+    ],
+)
+def test_an_odd_value_in_one_feed_never_loses_the_other_feeds(tmp_path, field):
+    key, _, value = field.partition(": ")
+    entry = {"name": "Odd", "url": "https://odd.example/feed.xml", key: value}
+    text = REAL_FEEDS + "  - " + "\n    ".join(f"{k}: {v}" for k, v in entry.items()) + "\n"
+    feeds = feeds_from(tmp_path, text)  # used to be "could not read the file (ValueError ...)", no feeds
+    assert [f.name for f in feeds.feeds][:3] == REAL_NAMES
+    assert all(problem.startswith("line 1") and "feed #4" in problem for problem in feeds.problems)
+
+
+def test_a_list_tag_on_a_group_is_a_yaml_problem_on_its_line(tmp_path):
+    feeds = feeds_from(tmp_path, "feeds:\n  - name: a\n    url: !!seq {a: 1}\n")
+    assert feeds.feeds == [] and feeds.problems[0].startswith(
+        "line 3, column 10: not valid YAML (expected a list, but found mapping)"
+    )
+
+
+def test_an_extra_feeds_line_with_several_urls_names_the_first_two(tmp_path):
+    urls = "".join(f"  - https://rss.app/feeds/Feed{i}.xml\n" for i in range(3))
+    feeds = feeds_from(tmp_path, f"feeds:\n{urls}feeds:\n  - {{name: b, url: 'https://b.example/b.xml'}}\n")
+    assert [f.name for f in feeds.feeds] == ["b"]
+    assert feeds.problems == [
+        "line 1: an extra 'feeds:' line with 3 URLs under it but no feed ('https://rss.app/feeds/Feed0.xml', "
+        "'https://rss.app/feeds/Feed1.xml' and 1 more); not read - move each into the list under line 5 as a "
+        "feed ('- name: ...' with 'url: ...' on the line below), then delete that 'feeds:' line"
+    ]
+
+
+def test_a_date_like_name_is_just_a_name(tmp_path):
+    feeds = feeds_from(tmp_path, "feeds:\n  - name: 2026-02-30\n    url: https://a.example/x.xml\n")
+    assert [f.name for f in feeds.feeds] == ["2026-02-30"] and feeds.problems == []
+
+
+# ----------------------------------------------------------------------------- follower counts written with dots
+
+
+@pytest.mark.parametrize(
+    ("written", "shown", "number"),
+    [
+        ("25.000", "25.000", 25000),  # YAML alone reads 25.0, and pydantic made that 25
+        ("'25.000'", "25.000", 25000),
+        ("25.000.000", "25.000.000", 25_000_000),
+        ("8.357", "8.357", 8357),
+    ],
+)
+def test_a_follower_count_with_thousands_dots_is_read_as_thousands_with_a_note(
+    tmp_path, written, shown, number
+):
+    feeds = feeds_from(
+        tmp_path, f"feeds:\n  - name: a\n    url: https://a.example/x.xml\n    audience: {written}\n"
+    )
+    assert [f.audience for f in feeds.feeds] == [number]
+    assert feeds.problems == [
+        f'line 4: feed #1 "a": audience {shown} was read as {number} - write it as {number}, without dots'
+    ]
+
+
+# ----------------------------------------------------------------------------- YAML mistakes name the right line
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "start", "hint"),
+    [
+        (  # the quote only ends at the next '"' (line 12), where YAML trips over a correct line
+            '    url: "https://rss.app/feeds/5KcRbde1HFqAzPdx.xml"',
+            '    url: "https://rss.app/feeds/5KcRbde1HFqAzPdx.xml',
+            'line 8, column 10: not valid YAML (the " opened here runs on to line 12)',
+            "a quote mark there is never closed: end the text with the same quote mark",
+        ),
+        (
+            '  - name: "Hellmei (@Hellmeitv)"',
+            '  - name: "Hellmei (@Hellmeitv)',
+            'line 7, column 11: not valid YAML (the " opened here runs on to line 8)',
+            "a quote mark there is never closed: end the text with the same quote mark",
+        ),
+        (
+            '    url: "https://rss.app/feeds/5KcRbde1HFqAzPdx.xml"',
+            '    url:"https://rss.app/feeds/5KcRbde1HFqAzPdx.xml"',
+            "line 8, column 5: not valid YAML (while scanning a simple key: could not find expected ':')",
+            "put a space after 'url:'",
+        ),
+        (
+            '  - name: "Hellmei (@Hellmeitv)"',
+            '  -name: "Hellmei (@Hellmeitv)"',
+            "line 7, column 3: not valid YAML (",
+            "put a space after the '-' at the start of that line",
+        ),
+    ],
+)
+def test_a_yaml_mistake_names_the_line_to_fix_and_how(tmp_path, old, new, start, hint):
+    assert old in REAL_FEEDS
+    feeds = feeds_from(tmp_path, REAL_FEEDS.replace(old, new, 1))
+    assert feeds.feeds == [] and len(feeds.problems) == 1
+    problem = feeds.problems[0]
+    assert problem.startswith(start) and problem.endswith(f"; no feeds were loaded - {hint}")
+
+
+# ----------------------------------------------------------------------------- README
+
+
+def test_the_readme_says_which_feeds_yaml_mistakes_stop_which_feeds():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    section = readme.split("## Add Instagram, TikTok and YouTube feeds", 1)[1].split("\n## ", 1)[0]
+    assert "warns you in the log" not in section  # those links are config problems: CI turns red
+    assert "Check your config/ folder" in section.split("### YouTube channel", 1)[0]  # step 5 says so
+    assert "A mistake never stops" not in section  # not true for a YAML mistake
+    assert "only skips that feed" in section and "pauses all your feeds" in section
+    smoke = readme.split("### Read a smoke run", 1)[1].split("\n### ", 1)[0]
+    assert "(the feeds that are fine still ran)" not in smoke

@@ -23,9 +23,11 @@ from collections.abc import Iterable, Iterator, Mapping
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic_core import PydanticCustomError
 
 from gembot.models import FEATURE_NAMES, SOURCES
 
@@ -338,6 +340,7 @@ class Sources(_Cfg):
 
 
 _THOUSANDS_RE = re.compile(r"\d{1,3}(?:[, _]\d{3})+")  # 8,357 / 8 357
+_DOTTED_THOUSANDS_RE = re.compile(r"\d{1,3}(?:\.\d{3})+")  # 25.000 / 1.200.000 (European style)
 _SHORT_COUNT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*([kKmM])")  # 25K / 1.2M
 
 
@@ -345,7 +348,7 @@ class FeedConfig(_Cfg):
     name: str
     url: str
     source: str = "rss"  # instagram | tiktok | youtube | rss | ...
-    audience: int | None = None
+    audience: int | None = Field(default=None, gt=0)
     enabled: bool = True
 
     @field_validator("source")
@@ -356,7 +359,10 @@ class FeedConfig(_Cfg):
     @field_validator("audience", mode="before")
     @classmethod
     def _follower_count(cls, value: Any) -> Any:
-        """Follower counts as profiles show them: ``8,357``, ``25K``, ``1.2M``."""
+        """Follower counts as profiles show them: ``8,357``, ``25K``, ``1.2M``. ``true`` is not one
+        (pydantic would read it as 1)."""
+        if isinstance(value, bool):
+            raise PydanticCustomError("int_type", "Input should be a valid integer")
         if not isinstance(value, str):
             return value
         text = value.strip()
@@ -508,10 +514,18 @@ class _YamlList(list):
 
 
 class _LineLoader(yaml.SafeLoader):
-    """Builds :class:`_YamlMap` / :class:`_YamlList`, so a problem in feeds.yaml can name its line."""
+    """Builds :class:`_YamlMap` / :class:`_YamlList`, so a problem in feeds.yaml can name its line.
+
+    Typed values are built leniently: a date (``name: 2026-02-30``), a number YAML cannot build
+    (``!!int abc``) or a dotted follower count (``25.000``) stays the text it was, so the feed's
+    own checks report it on its line instead of one bad value losing the whole file.
+    """
 
 
-def _construct_map(loader: _LineLoader, node: yaml.MappingNode) -> Iterator[_YamlMap]:
+def _construct_map(loader: _LineLoader, node: yaml.MappingNode) -> Iterator[_YamlMap | str]:
+    if isinstance(node, yaml.ScalarNode):  # "!!map text": the text, checked like any other value
+        yield loader.construct_scalar(node)
+        return
     data = _YamlMap(node.start_mark.line + 1)
     yield data
     data.update(loader.construct_mapping(node))
@@ -520,33 +534,69 @@ def _construct_map(loader: _LineLoader, node: yaml.MappingNode) -> Iterator[_Yam
         data.key_lines[key] = key_node.start_mark.line + 1
 
 
-def _construct_list(loader: _LineLoader, node: yaml.SequenceNode) -> Iterator[_YamlList]:
+def _construct_list(loader: _LineLoader, node: yaml.SequenceNode) -> Iterator[_YamlList | str]:
+    if isinstance(node, yaml.ScalarNode):  # "!!seq text"
+        yield loader.construct_scalar(node)
+        return
+    if not isinstance(node, yaml.SequenceNode):  # "!!seq {a: 1}": a YAML error with its line
+        raise yaml.constructor.ConstructorError(
+            None, None, f"expected a list, but found {node.id}", node.start_mark
+        )
     data = _YamlList(node.start_mark.line + 1, [item.start_mark.line + 1 for item in node.value])
     yield data
     data.extend(loader.construct_sequence(node))
 
 
+def _construct_text(loader: _LineLoader, node: yaml.ScalarNode) -> str:
+    return loader.construct_scalar(node)
+
+
+def _lenient(build: Any, *errors: type[Exception]) -> Any:
+    def construct(loader: _LineLoader, node: yaml.ScalarNode) -> Any:
+        try:
+            return build(loader, node)
+        except errors:
+            return loader.construct_scalar(node)
+
+    return construct
+
+
+def _construct_float(loader: _LineLoader, node: yaml.ScalarNode) -> Any:
+    if isinstance(node.value, str) and _DOTTED_THOUSANDS_RE.fullmatch(node.value):
+        return node.value  # "25.000": YAML would say 25.0; the feed check reads it as 25000, with a note
+    return yaml.constructor.SafeConstructor.construct_yaml_float(loader, node)
+
+
 _LineLoader.add_constructor("tag:yaml.org,2002:map", _construct_map)
 _LineLoader.add_constructor("tag:yaml.org,2002:seq", _construct_list)
+_LineLoader.add_constructor("tag:yaml.org,2002:timestamp", _construct_text)
+_LineLoader.add_constructor("tag:yaml.org,2002:float", _lenient(_construct_float, ValueError))
+_LineLoader.add_constructor(
+    "tag:yaml.org,2002:int", _lenient(yaml.constructor.SafeConstructor.construct_yaml_int, ValueError)
+)
+_LineLoader.add_constructor(
+    "tag:yaml.org,2002:bool", _lenient(yaml.constructor.SafeConstructor.construct_yaml_bool, KeyError)
+)
 
 
 def _parse_yaml(
     text: str, loader_class: type[yaml.SafeLoader], *, join_feeds: bool = False
 ) -> tuple[Any, list[tuple[str, int, int]], list[tuple[int, str]]]:
-    """``(data, repeated keys, problems from joining 'feeds:' lists)``; raises ``yaml.YAMLError``.
+    """``(data, repeated keys, problems from reading the 'feeds:' lists)``; raises ``yaml.YAMLError``.
 
     A key written twice keeps its first value (plain YAML silently keeps the last one, which
     once turned a stray ``feeds: [2]`` at the end of feeds.yaml into "no feeds at all"). With
-    ``join_feeds`` (feeds.yaml) every top-level ``feeds:`` list is read, as one list.
+    ``join_feeds`` (feeds.yaml) every top-level ``feeds:`` list is read, as one list, and a feed
+    typed without its leading ``- `` is split off the feed above it.
     """
     loader = loader_class(text)
     try:
         root = loader.get_single_node()
         if root is None:
             return None, [], []
-        joined = _join_feeds_lists(loader, root) if join_feeds else []
+        problems = (_join_feeds_lists(loader, root) + _split_run_on_feeds(root)) if join_feeds else []
         repeated = _drop_repeated_keys(loader, root)
-        return loader.construct_document(root), repeated, joined
+        return loader.construct_document(root), repeated, problems
     finally:
         loader.dispose()
 
@@ -589,45 +639,64 @@ def _drop_repeated_keys(loader: yaml.SafeLoader, root: yaml.Node) -> list[tuple[
 def _join_feeds_lists(loader: yaml.SafeLoader, root: yaml.Node) -> list[tuple[int, str]]:
     """feeds.yaml with more than one top-level ``feeds:`` (a second block further down, the
     example block uncommented, a leftover ``feeds: []``...): every list with a feed in it is
-    read, in file order, as one list, so no feed is lost; each extra ``feeds:`` line is a problem
-    that says which line to delete. Plain YAML would quietly keep only the last ``feeds:``."""
+    read, in file order, as one list, so no feed is lost. Each extra ``feeds:`` line is a problem
+    whose advice keeps every feed: "delete line N" alone only when the file still reads right
+    without that line. Plain YAML would quietly keep only the last ``feeds:``."""
     if not isinstance(root, yaml.MappingNode):
         return []
-    blocks = [
-        (key, value)
-        for key, value in root.value
-        if isinstance(key, yaml.ScalarNode) and key.tag == _STR_TAG and key.value == "feeds"
-    ]
+    blocks = [(key, value) for key, value in root.value if _key_text(key) == "feeds"]
     if len(blocks) < 2:
         return []
     # the one to keep: the first with a feed in it, else the first non-empty list, else the first
     keep_key, keep_value = min(blocks, key=lambda block: -_feeds_rank(block[1]))
     keep_line = keep_key.start_mark.line + 1
+    target = _list_column(keep_value)
     items: list[yaml.Node] = []
     problems: list[tuple[int, str]] = []
-    for key, value in blocks:
+    lined_up: set[int] = set()  # block lists that join the kept list once their 'feeds:' line goes
+    above: yaml.Node | None = None  # the value above, once the lines the advice deletes are gone
+    for key, value in root.value:
+        if _key_text(key) != "feeds":
+            above = value
+            continue
         line = key.start_mark.line + 1
         rank = _feeds_rank(value)
         if isinstance(value, yaml.SequenceNode) and (key is keep_key or rank == 2):
             items += value.value
         if key is keep_key:
+            lined_up.add(id(value))
+            above = value
             continue
         if rank == 2:
+            # without its 'feeds:' line, a block list right under a lined-up one joins it, as long
+            # as its '- ' is in the same column (else YAML reads the file as broken)
+            column = _list_column(value)
+            joins = above is not None and id(above) in lined_up
+            shift = target - column if joins and target is not None and column is not None else None
+            if shift == 0:
+                advice = f"delete line {line} and keep every feed under line {keep_line}"
+            elif shift is not None:
+                spaces = f"{abs(shift)} space{'s' if abs(shift) > 1 else ''}"
+                move = f"add {spaces} at the start of" if shift > 0 else f"remove {spaces} from the start of"
+                advice = (
+                    f"delete line {line} and {move} each line under it, so its '- ' lines up with the "
+                    f"ones under line {keep_line}"
+                )
+            else:
+                where = "on" if value.start_mark.line + 1 == line else "under"  # feeds: [{...}] or a list
+                advice = (
+                    f"move the feeds {where} line {line} into the list under line {keep_line}, then delete "
+                    "that 'feeds:' line"
+                )
+            if shift is not None:
+                lined_up.add(id(value))
             text = (
                 f"a second 'feeds:' line (the first is on line {keep_line}); what is under it was read "
-                f"as more feeds - delete line {line} and keep every feed under line {keep_line}"
+                f"as more feeds - {advice}"
             )
-        else:
-            if rank == 1:
-                what = "an extra 'feeds:' line with no feed in it"
-            elif isinstance(value, yaml.SequenceNode) or value.tag == _NULL_TAG:
-                what = "an extra, empty 'feeds:' line"
-            elif isinstance(value, yaml.ScalarNode):
-                found = _describe(loader.construct_object(value, deep=True))
-                what = f"an extra 'feeds:' line that is not a list (found {found})"
-            else:
-                what = "an extra 'feeds:' line that is not a list (found a group of settings)"
-            text = f"{what}; ignored - delete line {line} and keep the one on line {keep_line}"
+            above = value
+        else:  # its advice removes it and all under it, so 'above' stays what it was
+            text = _extra_feeds_line(loader, line, value, keep_line)
         problems.append((line, f"line {line}: {text}"))
     if isinstance(keep_value, yaml.SequenceNode):
         keep_value = yaml.SequenceNode(
@@ -640,11 +709,138 @@ def _join_feeds_lists(loader: yaml.SafeLoader, root: yaml.Node) -> list[tuple[in
     return problems
 
 
+def _extra_feeds_line(loader: yaml.SafeLoader, line: int, value: yaml.Node, keep_line: int) -> str:
+    """The problem for an extra 'feeds:' line with no feed list under it. Whatever it holds that
+    looks like a feed (a feed without its '- ', bare URLs) is named, so it can be moved, not lost."""
+    on_its_line = value.start_mark.line + 1 == line and value.end_mark.line + 1 == line
+    ignored = (
+        f"ignored - delete line {line} and keep the one on line {keep_line}"
+        if on_its_line
+        else f"ignored - delete line {line} and the lines under it, and keep the one on line {keep_line}"
+    )
+    if (isinstance(value, yaml.ScalarNode) and value.tag == _NULL_TAG) or (
+        isinstance(value, yaml.SequenceNode) and not value.value
+    ):
+        return f"an extra, empty 'feeds:' line; {ignored}"
+    if isinstance(value, yaml.MappingNode):  # "feeds:" then "  name: ..." without the "- "
+        fields = {_key_text(key): node for key, node in value.value if isinstance(node, yaml.ScalarNode)}
+        shown = fields.get("name") or fields.get("url")
+        if shown is None or not shown.value.strip():
+            return f"an extra 'feeds:' line that is not a list (found a group of settings); {ignored}"
+        first = _key_text(value.value[0][0]) or "name"
+        return (
+            f"an extra 'feeds:' line with a feed under it that has no '- ' in front "
+            f"({_short(repr(shown.value))}); not read - move it into the list under line {keep_line} and "
+            f"put '- ' before its '{first}:', then delete that 'feeds:' line"
+        )
+    nodes = value.value if isinstance(value, yaml.SequenceNode) else [value]
+    texts = [
+        node.value.strip()
+        for node in nodes
+        if isinstance(node, yaml.ScalarNode) and node.tag == _STR_TAG and node.value.strip()
+    ]
+    if texts:  # "feeds:" then "  - https://..." (a URL, but no name: and url: around it)
+        urls = all("://" in text or text.lower().startswith("www.") for text in texts)
+        what = ("a URL" if len(texts) == 1 else f"{len(texts)} URLs") if urls else "text"
+        shown = ", ".join(_short(repr(text)) for text in texts[:2])
+        if len(texts) > 2:
+            shown += f" and {len(texts) - 2} more"
+        return (
+            f"an extra 'feeds:' line with {what} under it but no feed ({shown}); not read - move "
+            f"{'it' if len(texts) == 1 else 'each'} into the list under line {keep_line} as a feed "
+            "('- name: ...' with 'url: ...' on the line below), then delete that 'feeds:' line"
+        )
+    if isinstance(value, yaml.SequenceNode):
+        return f"an extra 'feeds:' line with no feed in it; {ignored}"
+    found = _describe(loader.construct_object(value, deep=True))
+    return f"an extra 'feeds:' line that is not a list (found {found}); {ignored}"
+
+
 def _feeds_rank(node: yaml.Node) -> int:
     """2: a list with a feed (``- name: ...``) in it; 1: a list without one (``[2]``); 0: else."""
     if not isinstance(node, yaml.SequenceNode) or not node.value:
         return 0
     return 2 if any(isinstance(item, yaml.MappingNode) for item in node.value) else 1
+
+
+def _list_column(node: yaml.Node) -> int | None:
+    """The column of the '- ' of a block list (None for anything else, e.g. ``[a, b]``)."""
+    if isinstance(node, yaml.SequenceNode) and not node.flow_style and node.value:
+        return node.start_mark.column
+    return None
+
+
+def _key_text(node: yaml.Node) -> str | None:
+    """A mapping key's text (None for a key that is not plain text, e.g. ``? [a]``)."""
+    return node.value if isinstance(node, yaml.ScalarNode) and node.tag == _STR_TAG else None
+
+
+def _split_run_on_feeds(root: yaml.Node) -> list[tuple[int, str]]:
+    """A feed typed without its leading ``- `` joins the feed above it, so 'name' (and usually
+    'url' and 'source') come twice in one entry. Such an entry is split where its 'name' comes
+    again: the new feed is read on its own instead of being lost, and a problem says where the
+    '- ' is missing. Flow entries (``{name: a, name: b}``) are left to the repeated-key check."""
+    if not isinstance(root, yaml.MappingNode):
+        return []
+    problems: list[tuple[int, str]] = []
+    todo = [value for key, value in root.value if _key_text(key) == "feeds"]
+    done: set[int] = set()
+    while todo:
+        node = todo.pop()
+        if not isinstance(node, yaml.SequenceNode) or id(node) in done:
+            continue
+        done.add(id(node))
+        entries: list[yaml.Node] = []
+        for item in node.value:
+            if not isinstance(item, yaml.MappingNode):
+                entries.append(item)
+                continue
+            parts = [item] if item.flow_style else _split_entry(item)
+            for part in parts[1:]:
+                key = part.value[0][0]
+                line = key.start_mark.line + 1
+                problems.append(
+                    (
+                        line,
+                        f"line {line}: a new feed starts on line {line} but is missing '- ' before "
+                        f"'{key.value}:' - add it, in line with the '- ' of the feed above",
+                    )
+                )
+            entries += parts
+            # feeds indented under a stray "feeds:" inside a feed are read as feeds too
+            todo += [value for part in parts for key, value in part.value if _key_text(key) == "feeds"]
+        node.value = entries
+    return problems
+
+
+def _split_entry(node: yaml.MappingNode) -> list[yaml.MappingNode]:
+    """``node`` cut before each 'name' that comes again. The keys right above that 'name' which
+    the feed above already has (a ``url:`` typed first) go with the new feed."""
+    pairs = node.value
+    starts = [0]
+    for index, (key, _) in enumerate(pairs):
+        if _key_text(key) != "name":
+            continue
+        above = [_key_text(other) for other, _ in pairs[starts[-1] : index]]
+        if "name" not in above:
+            continue
+        start = index
+        while start - 1 > starts[-1] and above[start - 1 - starts[-1]] in above[: start - 1 - starts[-1]]:
+            start -= 1
+        starts.append(start)
+    if len(starts) == 1:
+        return [node]
+    ends = [*starts[1:], len(pairs)]
+    return [
+        yaml.MappingNode(
+            node.tag,
+            pairs[start:end],
+            pairs[start][0].start_mark,
+            pairs[end - 1][1].end_mark,
+            node.flow_style,
+        )
+        for start, end in zip(starts, ends, strict=True)
+    ]
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -674,7 +870,9 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 # --------------------------------------------------------------------------------------
 
 FEED_FIELDS = tuple(FeedConfig.model_fields)  # name, url, source, audience, enabled
-FEED_SOURCES_HINT = "instagram, tiktok, youtube or rss"
+# The platforms a feed stands for. A close typo of one (yotube) is read as it; nothing is ever
+# turned into another platform (twitch must not become itch, stream must not become steam).
+FEED_PLATFORMS = ("instagram", "tiktok", "youtube", "rss")
 # Optional fields whose bad value is left out (the feed still loads); a bad name, url or enabled
 # skips the feed ("enabled: paused" must not end up fetching a feed the user meant to pause).
 _LENIENT_FIELDS = frozenset({"audience", "source"})
@@ -682,6 +880,7 @@ _FRIENDLY_ERRORS = {
     "int_parsing": "must be a whole number like 25000",
     "int_from_float": "must be a whole number like 25000",
     "int_type": "must be a whole number like 25000",
+    "greater_than": "must be a follower count of 1 or more",
     "string_type": "must be text (put it in quotes)",
     "bool_parsing": "must be true or false",
     "bool_type": "must be true or false",
@@ -693,8 +892,9 @@ def load_feeds(path: Path, known_sources: Iterable[str] = SOURCES) -> Feeds:
     """Read feeds.yaml without ever raising: each feed is checked on its own, a broken one is
     skipped (or a stray key in it ignored) with a problem that names its line, and the rest load.
 
-    ``known_sources`` are the platforms a feed's ``source`` may name; a typo such as ``yotube``
-    is read as the platform it most likely means (else ``rss``), with a problem.
+    ``known_sources`` are the platforms a feed's ``source`` may name (any case). A close typo of
+    instagram / tiktok / youtube / rss (``yotube``) is read as that platform, with a problem; any
+    other source (``twitch``, a blog's own label) is kept as written.
     """
     if not path.exists():
         return Feeds()
@@ -714,7 +914,7 @@ def load_feeds(path: Path, known_sources: Iterable[str] = SOURCES) -> Feeds:
         for key, first, line in repeated
     ]
     try:
-        feeds = _read_feeds(data, problems, frozenset(known_sources))
+        feeds = _read_feeds(data, problems, frozenset(source.lower() for source in known_sources))
     except Exception as exc:  # last resort (a bug here must not stop a scan either)
         return Feeds(problems=[f"could not read the file ({type(exc).__name__}); no feeds were loaded"])
     problems.sort(key=lambda item: item[0])
@@ -765,11 +965,12 @@ def _read_feeds(
     feeds: list[FeedConfig] = []
     todo = _with_lines(entries)
     read_lists = {id(entries)}  # each list once, even if *aliases (or a loop) point at it again
+    first_with_url: dict[str, tuple[FeedConfig, str, int]] = {}  # url key -> (feed, label, url line)
     position = 0
     while position < len(todo):
         entry, line = todo[position]
         position += 1
-        feed, nested = _read_feed(entry, position, line, problems, known_sources)
+        feed, nested = _read_feed(entry, position, line, problems, known_sources, first_with_url)
         if feed is not None:
             feeds.append(feed)
         if nested is not None and id(nested) not in read_lists:
@@ -784,10 +985,18 @@ def _with_lines(items: list[Any]) -> list[tuple[Any, int]]:
 
 
 def _read_feed(
-    entry: Any, position: int, line: int, problems: list[tuple[int, str]], known_sources: frozenset[str]
+    entry: Any,
+    position: int,
+    line: int,
+    problems: list[tuple[int, str]],
+    known_sources: frozenset[str],
+    first_with_url: dict[str, tuple[FeedConfig, str, int]],
 ) -> tuple[FeedConfig | None, list[Any] | None]:
     """One ``- name: ...`` entry -> ``(FeedConfig, or None when skipped; the feeds indented under
-    a stray 'feeds:' line inside it, which are read next)``. Problems are appended."""
+    a stray 'feeds:' line inside it, which are read next)``. Problems are appended.
+
+    ``first_with_url`` holds the enabled feeds read so far by URL: a feed whose URL is already
+    there is skipped (its posts would count twice, once per entry)."""
     if not isinstance(entry, dict):
         problems.append(
             (
@@ -823,21 +1032,91 @@ def _read_feed(
         else:
             text = f"unknown key '{key}' ignored - {_key_hint(key)}"
         problems.append((key_line, f"{_at(key_line)}{label}: {text}"))
+    audience = known.get("audience")
+    if isinstance(audience, str) and _DOTTED_THOUSANDS_RE.fullmatch(audience.strip()):
+        known["audience"] = number = int(audience.strip().replace(".", ""))
+        audience_line = key_lines.get("audience", line)
+        problems.append(
+            (
+                audience_line,
+                f"{_at(audience_line)}{label}: audience {audience.strip()} was read as {number} - write it "
+                f"as {number}, without dots",
+            )
+        )
     feed = _validate_feed(known, label, line, key_lines, problems)
-    if feed is not None and feed.source not in known_sources:
+    if feed is None:
+        return None, nested
+    fixed = _source_typo(feed.source) if feed.source not in known_sources else None
+    if fixed is not None:
         source_line = key_lines.get("source", line)
-        close = difflib.get_close_matches(feed.source, sorted(known_sources), n=1, cutoff=0.6)
-        fixed = close[0] if close else "rss"
         problems.append(
             (
                 source_line,
                 f"{_at(source_line)}{label}: source '{_short(feed.source, 30)}' is not a platform GemBot "
-                f"knows; read as '{fixed}' - "
-                + ("fix the spelling" if close else f"use {FEED_SOURCES_HINT}"),
+                f"knows; read as '{fixed}' - fix the spelling",
             )
         )
         feed = feed.model_copy(update={"source": fixed})
+    if feed.enabled:
+        url_line = key_lines.get("url", line)
+        first, first_label, first_line = first_with_url.setdefault(
+            _url_key(feed.url), (feed, label, url_line)
+        )
+        if first is not feed:
+            same = first.name.strip().lower() == feed.name.strip().lower() and first.source == feed.source
+            text = (
+                f"the same feed as {first_label} (line {first_line}); read once - delete one of the two"
+                if same
+                else f"same url as {first_label} (line {first_line}), so it is not read twice - put this "
+                "feed's own URL here"
+            )
+            problems.append((url_line, f"{_at(url_line)}{label}: {text}"))
+            return None, nested
     return feed, nested
+
+
+def _source_typo(source: str) -> str | None:
+    """The feed platform a misspelled ``source`` means (``yotube``, ``instagarm``, ``tik tok``), else
+    None. Only a close typo counts: one slip in tiktok / youtube, two in instagram, none in rss."""
+    squeezed = re.sub(r"[\s_-]+", "", source)
+    for platform in FEED_PLATFORMS:
+        allowed = 2 if len(platform) >= 8 else 1 if len(platform) >= 5 else 0
+        if _typo_distance(squeezed, platform, allowed) <= allowed:
+            return platform
+    return None
+
+
+def _typo_distance(text: str, word: str, limit: int) -> int:
+    """Typing slips from ``text`` to ``word`` (a letter added, missing, changed, or two letters
+    swapped), counted up to ``limit + 1``."""
+    if abs(len(text) - len(word)) > limit:
+        return limit + 1
+    before: list[int] = []
+    previous = list(range(len(word) + 1))
+    for i in range(1, len(text) + 1):
+        current = [i] + [0] * len(word)
+        for j in range(1, len(word) + 1):
+            current[j] = min(
+                previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (text[i - 1] != word[j - 1])
+            )
+            if i > 1 and j > 1 and text[i - 1] == word[j - 2] and text[i - 2] == word[j - 1]:
+                current[j] = min(current[j], before[j - 2] + 1)
+        before, previous = previous, current
+    return min(previous[-1], limit + 1)
+
+
+def _url_key(url: str) -> str:
+    """``url`` as compared to spot a feed listed twice: no scheme, the host in lower case and
+    without ``www.``, no trailing ``/`` (the path and query keep their case: ids are in them)."""
+    text = url.strip()
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return text
+    if not parts.netloc:
+        return text
+    host = parts.netloc.lower().removeprefix("www.")
+    return host + parts.path.rstrip("/") + (f"?{parts.query}" if parts.query else "")
 
 
 def _validate_feed(
@@ -898,8 +1177,12 @@ def _field_reason(error: Mapping[str, Any]) -> str:
         return f"'{field}' is empty"
     reason = _FRIENDLY_ERRORS.get(error["type"], str(error.get("msg", "is not valid")))
     # never repr() a list or a group: *aliases can make it billions of items long
-    got = _short(repr(value)) if isinstance(value, str | int | float) else _describe(value)
+    plain = isinstance(value, str | int | float) and not isinstance(value, bool)
+    got = _short(repr(value)) if plain else _describe(value)
     return f"'{field}' {reason} (got {got})"
+
+
+_UNCLOSED_QUOTE_HINT = "a quote mark there is never closed: end the text with the same quote mark"
 
 
 def _yaml_problem(exc: yaml.YAMLError, text: str) -> str:
@@ -912,13 +1195,42 @@ def _yaml_problem(exc: yaml.YAMLError, text: str) -> str:
     context = getattr(exc, "context", None) or ""
     problem = getattr(exc, "problem", None) or ""
     mark = getattr(exc, "problem_mark", None)
-    if context.startswith(("while scanning a quoted scalar", "while parsing a flow")):
-        mark = getattr(exc, "context_mark", None) or mark  # where the quote, '[' or '{' was opened
+    runaway = _runaway_quote(text, mark) if "'\\t'" not in problem else None
+    if runaway is not None:  # the quote's line, not the later (correct) line YAML tripped over
+        start, end = runaway.start_mark, runaway.end_mark
+        return (
+            f"line {start.line + 1}, column {start.column + 1}: not valid YAML (the {runaway.style} opened "
+            f"here runs on to line {end.line + 1}); no feeds were loaded - {_UNCLOSED_QUOTE_HINT}"
+        )
+    if context.startswith(
+        ("while scanning a quoted scalar", "while parsing a flow", "while scanning a simple key")
+    ):
+        mark = getattr(exc, "context_mark", None) or mark  # where the quote, '[', '{' or key was opened
     what = ": ".join(filter(None, (context, problem))) or str(exc)
     where = f"line {mark.line + 1}, column {mark.column + 1}: " if mark is not None else ""
     return (
         f"{where}not valid YAML ({what}); no feeds were loaded - {_yaml_hint(context, problem, mark, text)}"
     )
+
+
+def _runaway_quote(text: str, mark: Any) -> Any:
+    """The quoted text that ran over its line break and swallowed the lines up to ``mark`` (its
+    ``ScalarToken``), else None. A quote left open mid-file only ends at the next quote mark, so
+    YAML trips over a later line that is fine; the open quote is the real mistake."""
+    if mark is None:
+        return None
+    found = None
+    try:
+        for token in yaml.scan(text, Loader=yaml.SafeLoader):
+            if token.start_mark.index >= mark.index:
+                break
+            if isinstance(token, yaml.ScalarToken) and token.style in ('"', "'"):
+                found = token if token.end_mark.line > token.start_mark.line else None
+    except yaml.YAMLError:
+        pass  # scanning stops where reading stopped
+    if found is not None and mark.line - found.end_mark.line <= 1:
+        return found
+    return None
 
 
 def _yaml_hint(context: str, problem: str, mark: Any, text: str) -> str:
@@ -928,11 +1240,17 @@ def _yaml_hint(context: str, problem: str, mark: Any, text: str) -> str:
     if "single document" in context:
         return "delete the '---' line (feeds.yaml is one list under 'feeds:')"
     if "quoted scalar" in context:
-        return "a quote mark there is never closed: end the text with the same quote mark"
+        return _UNCLOSED_QUOTE_HINT
     if "flow" in context:
         return "a '[' or '{' there is never closed; if it is part of a name, " + _QUOTE_HINT
     lines = text.splitlines()
-    before = lines[mark.line][: mark.column] if mark is not None and mark.line < len(lines) else ""
+    current = lines[mark.line] if mark is not None and mark.line < len(lines) else ""
+    before = current[: mark.column] if mark is not None else ""
+    glued = re.match(r"\s*(?:-\s+)?([^\s:#'\"]+):(?=[^\s:/])", current)
+    if "simple key" in context and glued:  # url:"https://..." is one long word to YAML
+        return f"put a space after '{glued.group(1)}:'"
+    if re.match(r"\s*-[^\s-]", current):  # -name: "..." is a key named "-name"
+        return "put a space after the '-' at the start of that line"
     if (
         "cannot start any token" in problem  # @handle, `name`, %, ...
         or any(word in context or word in problem for word in ("alias", "anchor", "tag", "block scalar"))

@@ -5,9 +5,12 @@ indented ``feeds:`` line, an entry without a url...) are reported as errors ever
 the valid feeds are still collected; the report is then not OK, so the status channel hears
 about it after a few runs. Every enabled entry of ``config/feeds.yaml`` is one unit of work:
 
-1. lint the URL: the RSS.app viewer page (``rss.app/feed/<id>``), JSON feeds, YouTube
-   channel pages and malformed YouTube channel ids are not feeds; the error tells the user
-   which URL to paste instead (and counts as a config mistake);
+1. lint the URL, for every enabled feed before anything is fetched (offline, so a 429, the
+   request budget or the clock never hides one, and an unchanged feeds.yaml gives the same
+   mistakes every run): the RSS.app viewer page (``rss.app/feed/<id>``), JSON feeds,
+   Instagram / TikTok / X / Bluesky pages, YouTube channel pages, malformed YouTube channel ids,
+   a missing ``https://`` or curly quotes are not feeds; the error tells the user what to change
+   (and counts as a config mistake), and that feed is not requested;
 2. conditional GET (ETag / Last-Modified); ``304 Not Modified`` means "nothing new". At most
    one retry and ``MAX_FEED_BYTES`` per body. A host that answers 429 is not asked again this
    run: its remaining feeds are skipped with one error (many feeds share rss.app);
@@ -66,6 +69,20 @@ YOUTUBE_HOSTS = frozenset({"youtube.com", "youtu.be"})
 YOUTUBE_FEED_HINT = "needs a feeds/videos.xml?channel_id=UC... URL (https://www.youtube.com/feeds/videos.xml?channel_id=UC...)"
 YOUTUBE_ID_RULE = "YouTube channel ids are 24 characters and start with UC"
 PAUSED_NOTE = "enabled: false in feeds.yaml"
+# Profile and post pages people paste instead of a feed (host -> "an Instagram", ...)
+SOCIAL_PAGE_HOSTS = {
+    "instagram.com": "an Instagram",
+    "instagr.am": "an Instagram",
+    "tiktok.com": "a TikTok",
+    "x.com": "an X",
+    "twitter.com": "an X",
+    "bsky.app": "a Bluesky",
+}
+RSS_APP_HINT = (
+    'make an RSS.app feed for that account (README: "Add Instagram, TikTok and YouTube feeds") and put '
+    "its https://rss.app/feeds/....xml URL here"
+)
+CURLY_QUOTES = "“”‘’„‟«»"
 
 _ID_RE = re.compile(r"[A-Za-z0-9._~:/@+-]+")
 _YT_VIDEO_RE = re.compile(
@@ -80,6 +97,10 @@ _TIKTOK_POST_RE = re.compile(r"tiktok\.com/@([\w.-]+)/(?:video|photo)/(\d+)", re
 _PROFILE_RE = re.compile(
     r"^https?://(?:www\.)?(?:instagram\.com/([\w.]+)|tiktok\.com/@([\w.-]+))/?(?:\?.*)?$", re.I
 )
+_SOCIAL_POST_RE = re.compile(r"/(?:p|reels?|tv|stories|video|photo|status|post)/", re.I)
+_BSKY_PROFILE_RE = re.compile(r"/profile/([^/?#]+)(/rss/?$)?", re.I)
+_SCHEME_TYPO_RE = re.compile(r"h?t{1,2}p{1,2}s?:?/{1,3}", re.I)  # htps://, https//, https:/ ...
+_BARE_HOST_RE = re.compile(r"(?:[a-z0-9-]+\.)+[a-z][a-z0-9-]*(?::\d+)?(?:[/?#]|$)", re.I)  # rss.app/...
 _TITLE_HANDLE_RE = re.compile(r"\(@([\w.]{1,30})\)")
 _HANDLE_RE = re.compile(r"@[\w.]{1,30}")
 
@@ -146,48 +167,68 @@ class RssCollector(Collector):
 
     def _collect_feeds(self) -> None:
         feeds = self.config.feeds.feeds
+        bad_urls = self._check_urls(feeds)
+        stopped: BudgetExceeded | None = None  # out of requests or out of time: the rest is skipped
+        stop_note = ""
         for index, feed in enumerate(feeds):
+            host = _host(feed.url)
             if not feed.enabled:
                 self._feed_result(feed, "paused", note=PAUSED_NOTE)
-                continue
-            host = _host(feed.url)
-            if host in self._limited_hosts:  # the error is reported once, when the host answered 429
+            elif index in bad_urls:
+                self._feed_result(feed, "config", note=bad_urls[index])
+            elif stopped is not None:
+                self._feed_result(feed, "skipped", note=stop_note)
+            elif host in self._limited_hosts:  # the error is reported once, when the host answered 429
                 self._feed_result(feed, "skipped", note=f"not requested: {host} answered HTTP 429 this run")
+            else:
+                try:
+                    self._collect_one(feed)
+                except BudgetExceeded as exc:  # say which ran out: requests or time
+                    stopped = exc
+                    stop_note = "not requested: " + str(exc).removeprefix(f"{self.budget.name}: ")
+                    self._feed_result(feed, "skipped", note=stop_note)
+                    continue
+                if host in self._limited_hosts:
+                    same_host = [
+                        later.name
+                        for number, later in enumerate(feeds[index + 1 :], start=index + 1)
+                        if later.enabled and number not in bad_urls and _host(later.url) == host
+                    ]
+                    self._skip_host(host, same_host)
+        if stopped is not None:
+            raise stopped
+
+    def _check_urls(self, feeds: list[FeedConfig]) -> dict[int, str]:
+        """Lint every enabled feed's URL before any request (``check_feed_url`` is offline): a URL
+        that can never work is a config problem on every run, also on runs where a 429, the request
+        budget or the clock stops the loop before that feed. ``{feed index: what to change}``."""
+        bad: dict[int, str] = {}
+        for index, feed in enumerate(feeds):
+            if not feed.enabled:
                 continue
             try:
-                self._collect_one(feed)
-            except BudgetExceeded as exc:  # out of requests or out of time: say which
-                note = "not requested: " + str(exc).removeprefix(f"{self.budget.name}: ")
-                for later in feeds[index:]:
-                    if later.enabled:
-                        self._feed_result(later, "skipped", note=note)
-                    else:
-                        self._feed_result(later, "paused", note=PAUSED_NOTE)
-                raise
-            if host in self._limited_hosts:
-                same_host = [
-                    later.name for later in feeds[index + 1 :] if later.enabled and _host(later.url) == host
-                ]
-                self._skip_host(host, same_host)
+                check_feed_url(feed.url)
+            except BadFeedUrl as exc:  # this URL can never work: feeds.yaml needs fixing
+                label = f"feed '{feed.name}'"
+                bad[index] = str(exc)
+                self.report.failed_units += 1
+                self.report.errors.append(f"{label}: BadFeedUrl: {exc}")
+                self.report.config_problems.append(f"config/feeds.yaml: {label}: {exc}")
+                self.log.warning("%s: %s", label, exc)
+        return bad
 
     def _collect_one(self, feed: FeedConfig) -> None:
         """``collect_feed`` inside ``guard``, plus this feed's row in ``report.feed_results``."""
         label = f"feed '{feed.name}'"
         errors, warnings = len(self.report.errors), len(self.report.warnings)
         mentions: list[Mention] = []
-        bad_url = False
         self._feed_note = ""
         with self.guard(label):
-            try:
-                mentions = self.collect_feed(feed)
-            except BadFeedUrl as exc:  # this URL can never work: feeds.yaml needs fixing
-                bad_url = True
-                self.report.config_problems.append(f"config/feeds.yaml: {label}: {exc}")
-                raise
+            mentions = self.collect_feed(feed)
             self.found.extend(mentions)
         new_errors = [_unlabelled(text, label) for text in self.report.errors[errors:]]
         if new_errors:
-            self._feed_result(feed, "config" if bad_url else "error", note=new_errors[0])
+            self._feed_result(feed, "error", note=new_errors[0])
             return
         notes = [_unlabelled(text, label) for text in self.report.warnings[warnings:]]
         if self._feed_note:
@@ -291,24 +332,40 @@ def check_feed_url(url: str) -> tuple[str, str | None]:
     """Return ``(url_to_fetch, warning)``; raise :class:`BadFeedUrl` for URLs that are not feeds.
 
     A YouTube ``/channel/UC...`` page is rewritten to its feed URL (with a warning); RSS.app
-    viewer pages, JSON feeds, YouTube ``@handle`` / ``/c/`` / ``/user/`` pages, a YouTube
-    ``channel_id`` that is not ``UC`` + 22 letters/digits/``_``/``-`` and the ``XXXX...``
-    placeholders of the example feeds are errors. Offline: this never makes a request
-    (``check-config`` runs it too).
+    viewer pages, JSON feeds, Instagram / TikTok / X / Bluesky profile and post pages, YouTube
+    ``@handle`` / ``/c/`` / ``/user/`` pages, a YouTube ``channel_id`` that is not ``UC`` + 22
+    letters/digits/``_``/``-``, the ``XXXX...`` placeholders of the example feeds, curly quotes,
+    spaces and a missing or misspelled ``https://`` are errors that say what to change.
+    Offline: this never makes a request (``check-config`` runs it too).
     """
     raw = url.strip()
+    if any(mark in raw for mark in CURLY_QUOTES):  # a phone keyboard's “ ” around the URL
+        raise BadFeedUrl(f'replace the curly quotes with straight ones, like url: "https://..." (got {raw})')
+    if any(char.isspace() for char in raw):
+        raise BadFeedUrl(f"there is a space inside the URL: delete it (got {raw!r})")
     try:
         parts = urlsplit(raw)
     except ValueError:  # e.g. "https://[not-an-ip]/feed"
         raise BadFeedUrl(f"not a valid URL: {raw!r}") from None
     if parts.scheme not in ("http", "https") or not parts.hostname:
-        raise BadFeedUrl(f"not an http(s) URL: {raw!r}")
+        raise BadFeedUrl(_not_http_problem(raw, parts.scheme, parts.netloc))
     if _PLACEHOLDER_RE.search(f"{parts.path}?{parts.query}"):
         raise BadFeedUrl(
             f"this is an example URL (the XXXX... part is a placeholder); put your own feed URL here (got {raw})"
         )
     host = _host(raw)
     path = parts.path
+    site = next((name for domain, name in SOCIAL_PAGE_HOSTS.items() if _on_domain(host, domain)), None)
+    if site is not None:
+        kind = "post" if _SOCIAL_POST_RE.search(path) else "profile"
+        bluesky = _BSKY_PROFILE_RE.match(path) if site == "a Bluesky" else None
+        if bluesky and bluesky.group(2):
+            return raw, None  # bsky.app/profile/<handle>/rss: Bluesky's own feed of an account
+        if bluesky:
+            fix = f"use https://bsky.app/profile/{bluesky.group(1)}/rss (Bluesky's own feed of that account)"
+        else:
+            fix = RSS_APP_HINT
+        raise BadFeedUrl(f"this is {site} {kind} page, not a feed: {fix} (got {raw})")
     if host == "rss.app":
         if not path.lower().endswith(".xml"):
             feed_id = path.rstrip("/").rsplit("/", 1)[-1].split(".")[0] or "<id>"
@@ -335,6 +392,31 @@ def check_feed_url(url: str) -> tuple[str, str | None]:
     if path.lower().endswith(".json"):
         raise BadFeedUrl(f"JSON feeds are not supported, use the RSS/Atom (.xml) URL (got {raw})")
     return raw, None
+
+
+def _not_http_problem(raw: str, scheme: str, netloc: str) -> str:
+    """What to change in a feed URL that does not start with ``http(s)://`` + a host."""
+    typo = _SCHEME_TYPO_RE.match(raw)
+    rest = raw[typo.end() :] if typo else raw.lstrip("/")
+    if _BARE_HOST_RE.match(rest):  # rss.app/feeds/..., https//rss.app/..., htps://...
+        fixed = f"https://{rest}"
+        try:
+            fetch, _ = check_feed_url(fixed)
+        except BadFeedUrl as exc:  # e.g. rss.app/feed/<id>: say that, about the URL as written
+            head, found, tail = str(exc).rpartition(fixed)
+            return f"{head}{raw}{tail}" if found else str(exc)
+        if typo:
+            return f"not an http(s) URL: the start must be exactly https:// - use {fetch} (got {raw})"
+        return f"not an http(s) URL: add https:// in front - use {fetch} (got {raw})"
+    if scheme and netloc:
+        return (
+            f"not an http(s) URL: feeds are read over https://, use the feed's https:// address (got {raw!r})"
+        )
+    return f"not an http(s) URL: put the feed's full address here, starting with https:// (got {raw!r})"
+
+
+def _on_domain(host: str, domain: str) -> bool:
+    return host == domain or host.endswith(f".{domain}")
 
 
 def youtube_channel_id_problem(value: str) -> str | None:

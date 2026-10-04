@@ -407,6 +407,87 @@ def test_the_status_channel_hears_what_is_left_when_feeds_yaml_is_fixed_halfway(
     assert (health.alerted_broken, health.alerted_mistakes) == (False, None)
 
 
+BAD_VIEWER_URL = """feeds:
+  - name: "GameGil (@officialgamegil)"
+    url: "https://rss.app/feeds/K1vwmXudAkt1exqO.xml"
+    source: instagram
+  - name: "Hellmei (@Hellmeitv)"
+    url: "https://rss.app/feed/5KcRbde1HFqAzPdx"
+    source: instagram
+  - name: "KreekCraft (YouTube)"
+    url: "https://www.youtube.com/feeds/videos.xml?channel_id=UCxsk7hqE_CwZWGEJEkGanbA"
+    source: youtube
+"""
+
+
+def rss_app_limited_on(limited_runs: set[int]):
+    """``hot_collectors`` plus the real RSS collector; rss.app answers 429 on the runs listed
+    (counted from 1), every other feed request gets a real feed."""
+    instagram = fixture_path("rss", "rssapp_instagram.xml").read_bytes()
+    youtube = fixture_path("rss", "youtube_channel.xml").read_bytes()
+    runs = [0]
+
+    def collectors(ctx):
+        runs[0] += 1
+        limited = runs[0] in limited_runs
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.host == "rss.app" and limited:
+                return httpx.Response(429, headers={"Retry-After": "600"})
+            content = youtube if "youtube" in request.url.host else instagram
+            return httpx.Response(200, content=content, headers={"Content-Type": "application/rss+xml"})
+
+        rss_ctx = CollectContext(
+            config=ctx.config, http=make_http(httpx.MockTransport(handler)), now=ctx.now, state=ctx.state
+        )
+        return {**hot_collectors(ctx), "rss": RssCollector(rss_ctx)}
+
+    return collectors
+
+
+@pytest.mark.parametrize("extra_mistake", [False, True])
+def test_a_429_never_hides_a_bad_url_from_the_status_channel(tmp_path, extra_mistake):
+    """rss.app saying 429 to the first feed used to skip the URL check of a later rss.app feed:
+    that run had no mistake (or one fewer), so #gembot-status said "rss is working again" or
+    "still failing" again and again, while nobody had edited feeds.yaml."""
+    text = BAD_VIEWER_URL + ("    audiance: 5000\n" if extra_mistake else "")
+    world = World(load_config(config_dir_with_feeds(tmp_path, text), env={}))
+    collectors = rss_app_limited_on({7, 9, 11})
+    said: list[str] = []
+    now = NOW
+    for _ in range(12):
+        result = world.run(now, collectors)
+        rss = result.reports["rss"]
+        assert not rss.ok and rss.config_errors == 1 + extra_mistake  # the same on every run
+        said += [line for line in result.status_lines if "rss" in line]
+        now += timedelta(minutes=30)
+    assert len(said) == 1 and said[0].startswith("⚠️ **rss** has failed 6 runs in a row.")
+    assert "use the https://rss.app/feeds/5KcRbde1HFqAzPdx.xml RSS URL" in said[0]
+    assert world.state.meta.source_health["rss"].consecutive_failures == 12
+
+
+def test_an_instagram_page_in_feeds_yaml_reaches_the_status_channel(tmp_path):
+    """The account's address (README step 2) pasted as the feed url: it used to be one failing feed
+    among working ones, so rss counted as OK and nobody was ever told."""
+    text = BAD_VIEWER_URL.replace(
+        "https://rss.app/feed/5KcRbde1HFqAzPdx", "https://www.instagram.com/hellmeitv/"
+    )
+    world = World(load_config(config_dir_with_feeds(tmp_path, text), env={}))
+    requested: list[str] = []
+    collectors = with_online_feeds(requested)
+    now = NOW
+    for _ in range(6):
+        result = world.run(now, collectors)
+        assert result.reports["rss"].ok_units == 2 and not result.reports["rss"].ok  # the other two work
+        now += timedelta(minutes=30)
+    assert not any("instagram.com" in url for url in requested)
+    assert len(result.status_lines) == 1
+    assert result.status_lines[0].startswith(
+        "⚠️ **rss** has failed 6 runs in a row. Last error: `config/feeds.yaml: feed 'Hellmei (@Hellmeitv)': "
+        "this is an Instagram profile page, not a feed: make an RSS.app feed for that account"
+    )
+
+
 def test_a_single_config_mistake_is_the_quoted_error_even_if_another_error_came_later():
     world = World()
     mistake = "config/feeds.yaml: line 3, column 11: not valid YAML (found character '`' that cannot start any token)"

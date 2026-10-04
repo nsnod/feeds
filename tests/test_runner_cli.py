@@ -561,6 +561,36 @@ def test_check_config_lints_enabled_feeds_offline(tmp_path, capsys, monkeypatch)
     )
 
 
+@pytest.mark.parametrize(
+    ("url", "problem"),
+    [
+        (  # the account's address from README step 2 used to print "config OK"
+            '"https://www.instagram.com/hellmeitv/"',
+            "this is an Instagram profile page, not a feed: make an RSS.app feed for that account",
+        ),
+        ('"https://www.tiktok.com/@hellmeitv"', "this is a TikTok profile page, not a feed"),
+        (
+            "rss.app/feeds/5KcRbde1HFqAzPdx.xml",
+            "not an http(s) URL: add https:// in front - use https://rss.app/feeds/5KcRbde1HFqAzPdx.xml",
+        ),
+        ("“https://rss.app/feeds/5KcRbde1HFqAzPdx.xml”", "replace the curly quotes with straight ones"),
+    ],
+)
+def test_check_config_fails_on_a_url_that_is_not_a_feed_and_says_what_to_change(
+    tmp_path, capsys, url, problem
+):
+    directory = config_dir_with_feeds(
+        tmp_path,
+        "feeds:\n"
+        '  - name: "GameGil"\n    url: "https://rss.app/feeds/K1vwmXudAkt1exqO.xml"\n    source: instagram\n'
+        f'  - name: "Hellmei"\n    url: {url}\n    source: instagram\n',
+    )
+    assert cli.main(["--config-dir", str(directory), "check-config"]) == 1
+    out = capsys.readouterr().out
+    assert f"config problem: feeds.yaml: feed 'Hellmei': {problem}" in out
+    assert "(until then the scan keeps reading the 1 feed(s) that work)" in out and "config OK" not in out
+
+
 def test_a_scan_with_the_incident_file_runs_instead_of_stopping(tmp_path, monkeypatch):
     seen: dict = {}
 
