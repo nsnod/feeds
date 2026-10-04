@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+ <link rel="self" href="http://www.youtube.com/feeds/videos.xml?channel_id=UCabcdefghijklmnopqrstuv"/>
+ <id>yt:channel:abcdefghijklmnopqrstuv</id>
+ <yt:channelId>abcdefghijklmnopqrstuv</yt:channelId>
+ <title>Tiny Pixel Devlogs</title>
+ <link rel="alternate" href="https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv"/>
+ <author>
+  <name>Tiny Pixel Devlogs</name>
+  <uri>https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv</uri>
+ </author>
+ <published>2019-03-14T09:21:07+00:00</published>
+ <entry>
+  <id>yt:video:pReMiErE001</id>
+  <yt:videoId>pReMiErE001</yt:videoId>
+  <yt:channelId>UCabcdefghijklmnopqrstuv</yt:channelId>
+  <title>Gorilla Pizza Panic - Announcement Trailer (Premiere)</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=pReMiErE001"/>
+  <author>
+   <name>Tiny Pixel Devlogs</name>
+   <uri>https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv</uri>
+  </author>
+  <published>2026-10-03T09:00:00+00:00</published>
+  <updated>2026-10-03T09:00:00+00:00</updated>
+  <media:group>
+   <media:title>Gorilla Pizza Panic - Announcement Trailer (Premiere)</media:title>
+   <media:content url="https://www.youtube.com/v/pReMiErE001?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i1.ytimg.com/vi/pReMiErE001/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Up to 4 apes, one pizza oven. Wishlist now: https://store.steampowered.com/app/2345670/Gorilla_Pizza_Panic/.
+Demo on itch: https://lighthouse-games.itch.io/gorilla-pizza-panic
+Proximity chat, physics, friendship-ending chaos. #friendslop #coop</media:description>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:dQw4w9WgXcQ</id>
+  <yt:videoId>dQw4w9WgXcQ</yt:videoId>
+  <yt:channelId>UCabcdefghijklmnopqrstuv</yt:channelId>
+  <title>I made a roguelike about a lighthouse keeper (Devlog #12)</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=dQw4w9WgXcQ"/>
+  <author>
+   <name>Tiny Pixel Devlogs</name>
+   <uri>https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv</uri>
+  </author>
+  <published>2026-10-02T16:00:31+00:00</published>
+  <updated>2026-10-03T21:14:02+00:00</updated>
+  <media:group>
+   <media:title>I made a roguelike about a lighthouse keeper (Devlog #12)</media:title>
+   <media:content url="https://www.youtube.com/v/dQw4w9WgXcQ?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i2.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg" width="480" height="360"/>
+   <media:description>Wishlist on Steam: https://store.steampowered.com/app/0000000/
+This week: fog shaders, a new boss, and why I rewrote the save system.</media:description>
+   <media:community>
+    <media:starRating count="842" average="5.00" min="1" max="5"/>
+    <media:statistics views="12873"/>
+   </media:community>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:aZXQk7zkdy0</id>
+  <yt:videoId>aZXQk7zkdy0</yt:videoId>
+  <yt:channelId>UCabcdefghijklmnopqrstuv</yt:channelId>
+  <title>The lighthouse beam took 3 days #gamedev #indiegame</title>
+  <link rel="alternate" href="https://www.youtube.com/shorts/aZXQk7zkdy0"/>
+  <author>
+   <name>Tiny Pixel Devlogs</name>
+   <uri>https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv</uri>
+  </author>
+  <published>2026-09-29T18:30:05+00:00</published>
+  <updated>2026-10-01T04:02:44+00:00</updated>
+  <media:group>
+   <media:title>The lighthouse beam took 3 days #gamedev #indiegame</media:title>
+   <media:content url="https://www.youtube.com/v/aZXQk7zkdy0?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i3.ytimg.com/vi/aZXQk7zkdy0/hqdefault.jpg" width="480" height="360"/>
+   <media:description></media:description>
+   <media:community>
+    <media:starRating count="3120" average="5.00" min="1" max="5"/>
+    <media:statistics views="48211"/>
+   </media:community>
+  </media:group>
+ </entry>
+ <entry>
+  <id>yt:video:OlDvIdEo123</id>
+  <yt:videoId>OlDvIdEo123</yt:videoId>
+  <yt:channelId>UCabcdefghijklmnopqrstuv</yt:channelId>
+  <title>Devlog #1: why a lighthouse?</title>
+  <link rel="alternate" href="https://www.youtube.com/watch?v=OlDvIdEo123"/>
+  <author>
+   <name>Tiny Pixel Devlogs</name>
+   <uri>https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv</uri>
+  </author>
+  <published>2026-07-01T12:00:00+00:00</published>
+  <updated>2026-09-01T12:00:00+00:00</updated>
+  <media:group>
+   <media:title>Devlog #1: why a lighthouse?</media:title>
+   <media:content url="https://www.youtube.com/v/OlDvIdEo123?version=3" type="application/x-shockwave-flash" width="640" height="390"/>
+   <media:thumbnail url="https://i4.ytimg.com/vi/OlDvIdEo123/hqdefault.jpg" width="480" height="360"/>
+   <media:description>The first one.</media:description>
+   <media:community>
+    <media:starRating count="12" average="5.00" min="1" max="5"/>
+    <media:statistics views="301"/>
+   </media:community>
+  </media:group>
+ </entry>
+</feed>
