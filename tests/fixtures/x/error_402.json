@@ -1,0 +1,6 @@
+{
+  "title": "Payment Required",
+  "type": "https://api.x.com/2/problems/credits",
+  "status": 402,
+  "detail": "Your enrolled account does not have any credits to fulfill this request."
+}
