@@ -1,0 +1,36 @@
+{
+  "did": "did:plc:gembottest4xq2m7kz3d5vbn",
+  "didDoc": {
+    "@context": [
+      "https://www.w3.org/ns/did/v1",
+      "https://w3id.org/security/multikey/v1",
+      "https://w3id.org/security/suites/secp256k1-2019/v1"
+    ],
+    "id": "did:plc:gembottest4xq2m7kz3d5vbn",
+    "alsoKnownAs": [
+      "at://gembot-test.bsky.social"
+    ],
+    "verificationMethod": [
+      {
+        "id": "did:plc:gembottest4xq2m7kz3d5vbn#atproto",
+        "type": "Multikey",
+        "controller": "did:plc:gembottest4xq2m7kz3d5vbn",
+        "publicKeyMultibase": "zQ3shFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE"
+      }
+    ],
+    "service": [
+      {
+        "id": "#atproto_pds",
+        "type": "AtprotoPersonalDataServer",
+        "serviceEndpoint": "https://amanita.us-east.host.bsky.network"
+      }
+    ]
+  },
+  "handle": "gembot-test.bsky.social",
+  "email": "gembot@example.com",
+  "emailConfirmed": true,
+  "emailAuthFactor": false,
+  "accessJwt": "eyJhbGciOiJFUzI1NksifQ.FAKE-ACCESS-JWT-1.sig",
+  "refreshJwt": "eyJhbGciOiJFUzI1NksifQ.FAKE-REFRESH-JWT-1.sig",
+  "active": true
+}

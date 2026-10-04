@@ -271,9 +271,14 @@ class BlueskySource(_Cfg):
     limit: int = 50
     sort: str = "latest"
     lang: str | None = "en"
-    pds_host: str = "https://bsky.social"
-    public_appview: str = "https://public.api.bsky.app"
+    pds_host: str = "https://bsky.social"  # login server: createSession / refreshSession
+    public_appview: str = "https://public.api.bsky.app"  # logged-out reads; never gets a token
     max_post_age_hours: int = 72
+    appview: str = "https://api.bsky.app"  # fallback search route when the PDS proxy refuses (Bearer token)
+    appview_proxy: str = "did:web:api.bsky.app#bsky_appview"  # atproto-proxy header for searches via the PDS
+    search_pages: int = 1  # result pages per term (each page is one request)
+    max_sessions_per_day: int = 8  # createSession calls per 24h (bsky.social allows ~10 per account per day)
+    unauth_probe_hours: float = 24.0  # without a login: re-check public search at most this often
 
 
 class XSource(_Cfg):

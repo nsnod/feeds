@@ -109,12 +109,20 @@ bluesky:
     - friendslop
     - '"co-op horror"'
     - '"with friends" #indiegame'
-  limit: 50
+  limit: 50                      # posts per search request (max 100)
   sort: latest
   lang: en
-  pds_host: "https://bsky.social"
-  public_appview: "https://public.api.bsky.app"
+  search_pages: 1                # pages per term; each page is one request
   max_post_age_hours: 72
+  # Search needs a login (BLUESKY_HANDLE + BLUESKY_APP_PASSWORD secrets); public search is blocked.
+  # The session is reused between runs (encrypted in the state branch) because bsky.social only
+  # allows about 10 logins per account per day.
+  pds_host: "https://bsky.social"          # login server
+  appview: "https://api.bsky.app"          # fallback search route (with the login token)
+  appview_proxy: "did:web:api.bsky.app#bsky_appview"
+  public_appview: "https://public.api.bsky.app"   # logged-out reads: replies and follower counts
+  max_sessions_per_day: 8        # new logins per 24h before GemBot waits
+  unauth_probe_hours: 24         # without a login: re-check whether public search works this often
 
 x:
   enabled: true          # only runs when the X_BEARER_TOKEN secret is set (paid API, ~$0.005 per post read)
