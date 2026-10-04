@@ -544,10 +544,8 @@ def test_default_sleep_is_the_http_clients(steam_api):
     run = steam_api()
     collector = SteamCollector(run.collector.ctx)
     assert collector.sleep == run.collector.http.sleep
-    # Steam requests are never retried (first 429 stops the stage); the shared client is untouched
-    assert collector.steam_http.retries == 0 and collector.http.retries == 2
-    assert collector.steam_http.sleep == collector.http.sleep
-    assert collector.steam_http.user_agent == collector.http.user_agent
+    # Steam requests pass retries=0 per request; the shared client keeps its own retry count
+    assert collector.http.retries == 2
 
 
 # ---------------------------------------------------------------- pagination

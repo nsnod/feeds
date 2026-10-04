@@ -52,7 +52,6 @@ Followers
 from __future__ import annotations
 
 import contextlib
-import dataclasses
 import json
 import re
 from collections.abc import Callable, Iterable
@@ -65,7 +64,7 @@ from selectolax.lexbor import LexborHTMLParser, LexborNode
 
 from gembot.collectors.base import CollectContext, Collector
 from gembot.config import SteamSearch
-from gembot.http import Budget, BudgetExceeded, HttpClient, HttpError, RateLimited
+from gembot.http import Budget, BudgetExceeded, HttpError, RateLimited
 from gembot.models import Mention, SteamInfo, ensure_utc
 
 STORE = "https://store.steampowered.com"
@@ -439,8 +438,6 @@ class SteamCollector(Collector):
         self.settings = ctx.config.sources.steam
         # Same sleep as the HTTP layer by default (time.sleep live, a no-op in tests/replay).
         self.sleep = sleep or self.http.sleep
-        # One try per Steam request: the first 429 must stop the stage, not be retried.
-        self.steam_http: HttpClient = dataclasses.replace(self.http, retries=0)
         self.throttled = False
         self._requests = 0
         self._by_appid: dict[int, Mention] = {}
@@ -500,7 +497,9 @@ class SteamCollector(Collector):
             self.sleep(self.settings.request_interval_s)
         self._requests += 1
         try:
-            return self.steam_http.get(url, budget=self.budget, params=params, headers=HEADERS)
+            # One try per Steam request (retries=0): the first 429 must stop the stage, because
+            # Steam escalates repeated 429s into 403 blocks.
+            return self.http.get(url, budget=self.budget, params=params, headers=HEADERS, retries=0)
         except HttpError as exc:
             if isinstance(exc, RateLimited) or exc.status == 403:
                 self._throttle(exc)
