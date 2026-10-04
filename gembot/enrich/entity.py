@@ -32,7 +32,7 @@ import html
 import logging
 import re
 import unicodedata
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from urllib.parse import parse_qs, unquote, urljoin, urlsplit
@@ -51,6 +51,7 @@ MAX_ALIASES = 12
 MAX_CANDIDATES = 8
 MAX_FUZZY_CANDIDATES = 3  # only the best few candidates are used to *join* an existing game
 MAX_TEXT_CHARS = 1500  # candidate extraction only looks at the start of long posts
+MAX_TITLE_CHARS = 300  # ... and of absurdly long titles (the Title Case regexes are quadratic in run length)
 _TEXT_OFFSET = 100_000  # positions in the body sort after positions in the title
 
 # --------------------------------------------------------------------------------------
@@ -164,6 +165,9 @@ _BARE_URL = re.compile(
     rf"(?=[/\s.,!?;:)\]]|$)(?:/{_URL_CHARS}*)?"
 )
 _TRAILING = ".,!?;:'\"*~`…»”’>"
+# Display-truncated links ("gorilladev.itch.io/gorilla-pizz...", "store.steampowered.com/app/35272…")
+# point at a different page than the real one: ignore them.
+_TRUNCATED = re.compile(r"(?:\.\.\.|…)[)\]\"'”’*>,;:!?]*$")
 
 
 def _trim_url(url: str) -> str:
@@ -176,26 +180,39 @@ def _trim_url(url: str) -> str:
     return url
 
 
-def extract_urls(text: str) -> list[str]:
-    """Every URL in ``text`` (markdown links, trailing punctuation and bare store links handled)."""
-    if not text:
-        return []
-    text = text.replace("\\_", "_").replace("&amp;", "&")
+def _url_text(text: str) -> str:
+    return (text or "").replace("\\_", "_").replace("&amp;", "&")
+
+
+def _url_spans(text: str) -> list[tuple[int, str]]:
+    """(start, url) for every URL in already-:func:`_url_text`-normalised text, in order."""
     found: list[tuple[int, str]] = []
     spans: list[tuple[int, int]] = []
     for match in _SCHEME_URL.finditer(text):
+        spans.append(match.span())
+        if _TRUNCATED.search(match.group(0)):
+            continue
         url = _trim_url(match.group(0))
         if "://" in url and len(url.split("://", 1)[1]) > 0:
             found.append((match.start(), url))
-        spans.append(match.span())
     for match in _BARE_URL.finditer(text):
-        if any(start <= match.start() < end for start, end in spans):
+        if any(start <= match.start() < end for start, end in spans) or _TRUNCATED.search(match.group(0)):
             continue
         url = _trim_url(match.group(0))
         if url:
             found.append((match.start(), "https://" + url))
     found.sort(key=lambda item: item[0])
-    return _unique(url for _, url in found)
+    return found
+
+
+def extract_urls(text: str) -> list[str]:
+    """Every URL in ``text`` (markdown links, trailing punctuation and bare store links handled).
+
+    Links truncated for display ("...", "…") are skipped: they would name a different page.
+    """
+    if not text:
+        return []
+    return _unique(url for _, url in _url_spans(_url_text(text)))
 
 
 def _unique(items: Iterable[str]) -> list[str]:
@@ -310,21 +327,93 @@ def _mention_urls(mention: Mention) -> list[str]:
     return _unique([mention.url, *mention.links, *extract_urls(mention.title), *extract_urls(mention.text)])
 
 
+# "If you liked <link>", "heavily inspired by <link>", "fans of <link>": a reference, not this game.
+_REFERENCE_PHRASE = re.compile(
+    r"(?i)\b(?:if\s+you\s+(?:liked?|loved?|enjoy(?:ed)?|played|dig)|fans?\s+of|inspired\s+by|similar\s+to|"
+    r"reminds?\s+(?:me\s+|you\s+|us\s+)?of|in\s+the\s+(?:style|vein|spirit)\s+of|successor\s+to|"
+    r"(?:clone|rip-?off|knock-?off)\s+of|versus|vs\.?|than|a\s+la|à\s+la)(?!\w)"
+)
+_LIKE_WORD = re.compile(r"(?i)\blike\b")
+_SENTENCE_BREAK = re.compile(r"(?<=[a-z0-9)])[.!?](?=\s)|[!?;\n]|(?:https?://|steam://)\S+")
+_WRAPPING = "[](){}<>\"'“”‘’*"
+
+
+def _is_reference_link(text: str, start: int) -> bool:
+    """True when the URL at ``start`` follows a comparison ("If you liked X (<url>)", "inspired by <url>")."""
+    clause = _SENTENCE_BREAK.split(text[max(0, start - 120) : start])[-1]
+    for pattern, names_only in ((_REFERENCE_PHRASE, False), (_LIKE_WORD, True)):
+        matches = list(pattern.finditer(clause))
+        if not matches:
+            continue
+        words = [w.strip(_WRAPPING) for w in clause[matches[-1].end() :].split()]
+        words = [w for w in words if w]
+        if len(words) > 5:
+            continue
+        if names_only and not all(w[0].isupper() or w[0].isdigit() for w in words):
+            continue  # "I'd like you to try <url>" is not a comparison; "like Lethal Company (<url>)" is
+        return True
+    return False
+
+
+def _names_agree(a: str | None, b: str | None) -> bool:
+    na, nb = normalize_title(a or ""), normalize_title(b or "")
+    if not na or not nb:
+        return False
+    if fuzz.ratio(na, nb) >= 85:
+        return True
+    return fuzz.token_set_ratio(na, nb) == 100 and min(len(na.split()), len(nb.split())) >= 2
+
+
 def hard_ids_for(mention: Mention, expander: LinkExpander | None = None) -> list[str]:
-    """Hard ids of the game(s) a mention points at, Steam ids first (the mention's own id leads)."""
-    ids: list[str] = []
+    """Hard ids of the game(s) a mention points at, best first.
+
+    The mention's own Steam/itch id leads. Links introduced as a comparison ("If you liked
+    <link>", "inspired by <link>") are ignored. Among the rest, links whose URL slug names one
+    of the post's title candidates come first and links whose slug names something else last;
+    ties keep Steam before itch.
+    """
+    expanded_ids: dict[str, str | None] = {}
+
+    def hard_of(url: str) -> str | None:
+        if url not in expanded_ids:
+            hard = canonical_hard_id(url)
+            if hard is None and expander is not None:
+                expanded = expander.expand(url)
+                if expanded != url:
+                    hard = canonical_hard_id(expanded)
+            expanded_ids[url] = hard
+        return expanded_ids[url]
+
+    text_urls: list[str] = []
+    reference_urls: list[str] = []
+    for raw in (mention.title, mention.text):
+        normalised = _url_text(raw)
+        for start, url in _url_spans(normalised):
+            (reference_urls if _is_reference_link(normalised, start) else text_urls).append(url)
+    references = {h for h in map(hard_of, reference_urls) if h}
+    explicit = {h for h in map(hard_of, [mention.url, *text_urls]) if h}
     own = _own_hard_id(mention)
-    if own:
-        ids.append(own)
-    for url in _mention_urls(mention):
-        hard = canonical_hard_id(url)
-        if hard is None and expander is not None:
-            expanded = expander.expand(url)
-            if expanded != url:
-                hard = canonical_hard_id(expanded)
-        if hard and hard not in ids:
-            ids.append(hard)
-    return sorted(ids, key=lambda h: 0 if h.startswith("steam:") else 1)  # stable: keeps own id first
+    entries: list[tuple[str, str]] = []  # (hard id, url) in order of appearance
+    for url in _unique([mention.url, *mention.links, *text_urls]):
+        hard = hard_of(url)
+        if hard and hard != own and (hard not in references or hard in explicit):
+            entries.append((hard, url))
+    ordered = _unique(h for h, _ in entries)
+    if len(ordered) >= 2:
+        candidates = title_candidates(mention)
+
+        def slug_fit(hard_id: str) -> int:
+            """0: the URL slug names one of the post's titles, 1: unknown, 2: it names something else."""
+            slugs = [t for h, url in entries if h == hard_id and (t := _title_from_url(url))]
+            if not candidates or not slugs:
+                return 1
+            return 0 if any(_names_agree(s, c) for s in slugs for c in candidates) else 2
+
+        rank = {h: (slug_fit(h), 0 if h.startswith("steam:") else 1, i) for i, h in enumerate(ordered)}
+        ordered.sort(key=rank.__getitem__)
+    else:
+        ordered.sort(key=lambda h: 0 if h.startswith("steam:") else 1)
+    return ([own] if own else []) + ordered
 
 
 # --------------------------------------------------------------------------------------
@@ -357,6 +446,10 @@ _GENERIC_WORDS = _wordset(
     finally just still also really very so but not some any all every more most best good great cool fun
     funny chaotic cozy short shorts live stream streamer streamers twitch vod episode part
     destroymygame playmygame coopgaming unrealengine pov
+    upcoming hidden gem gems top postmortem post mortem result results learned lessons lesson stats numbers
+    sales revenue data tips advice guide tutorial breakdown analysis review reviews recap highlights festival
+    expo convention booth pax gdc gamescom summer west east hiring hire job jobs shoutout shout huge cross
+    posting crossposting crosspost come say ragdoll ragdolls opinion opinions inspired clone clones
     """
 )
 _GENERIC_PHRASES = frozenset(
@@ -374,6 +467,11 @@ _GENERIC_PHRASES = frozenset(
         "game maker",
         "early access",
         "co op",
+        "hidden gem",
+        "summer game fest",
+        "game fest",
+        "post mortem",
+        "early access launch",
     }
 )
 _REFERENCE_GAMES = frozenset(
@@ -384,9 +482,38 @@ _REFERENCE_GAMES = frozenset(
     left 4 dead|left 4 dead 2|gtfo|sea of thieves|a way out|stardew valley|terraria|helldivers 2|palworld|
     garrys mod|gmod|people playground|totally accurate battle simulator|lethal league|risk of rain 2|
     the forest|sons of the forest|rust|dayz|gorilla tag|vrchat|rec room|webfishing|bread and fred|
-    pico park|devour|the outlast trials|we were here|liars bar|r e p o""".replace("\n", "").split("|")
+    pico park|devour|the outlast trials|we were here|liars bar|schedule 1|schedule one|supermarket together|
+    peak game|lethal company 2|bodycam|r e p o""".replace("\n", "").split("|")
 )
 _REFERENCE_GAMES = frozenset(name.strip() for name in _REFERENCE_GAMES if name.strip())
+_REFERENCE_COMPACT = frozenset(name.replace(" ", "") for name in _REFERENCE_GAMES)
+# Words that make a Title Case run a sentence or a listicle rather than a name.
+_VERB_WORDS = _wordset(
+    "added adds made makes got gets reached reaches built builds created creates turned turns became becomes "
+    "tried tries explains explained learned learnt sold sells earned earns spent spends finished finishes "
+    "started starts quit switched switches rewrote rewrites fixed fixes implemented implements redesigned "
+    "changed changes improved improves completed shipped ships published ported remade revamped updated "
+    "reviewed ranks ranked rates rated finds takes took gives gave goes went comes came does did needs wants "
+    "shows showed hired hits"
+)
+_LISTICLE_NEXT = _wordset(
+    "best top upcoming hidden new indie games things tips ways reasons most free co-op coop horror "
+    "multiplayer great underrated cozy must"
+)
+_GERUND_NOUNS = _wordset(
+    "viking vikings spring springs string strings morning evening ceiling wedding pudding something nothing "
+    "everything anything thing things king kings sterling darling duckling dumpling dumplings sibling siblings "
+    "ring rings wing wings swing sling sting bling lightning feeling ending endings beginning herring blessing "
+    "offering earring"
+)
+_FUNCTION_WORDS = _wordset("a an the to in into for of with my our your on at from about")
+# what a devlog adds ("Adding Proximity Chat"), as opposed to genre nouns ("Cooking Simulator")
+_FEATURE_WORDS = _wordset(
+    "multiplayer coop co op online proximity chat voice ragdoll ragdolls physics lighting shader shaders "
+    "animation animations ai npc npcs enemy enemies ui menu lobby netcode networking steam demo trailer devlog "
+    "update game games wishlist wishlists level levels map maps boss weapon weapons inventory crafting"
+)
+_COMPARISON_LEAD = _wordset("like unlike liked loved enjoyed")
 _PRONOUN_START = _wordset(
     "i i'm im i've ive i'd we we're we've you you're it it's its this that he she they what how why when "
     "where who which does do did is are can could should would will any anyone anybody help looking need "
@@ -405,9 +532,12 @@ _CUT = _wordset(
     "releases releasing released out demo trailer teaser playtest wishlist available official announce "
     "announcement announced gameplay steam update devlog early free my our your its it's this that i we "
     "you they made making built co-op coop multiplayer game games with for by from about where when which "
-    "who after finally"
+    "who after finally but meets like clone style inspired esque vibes ripoff killer"
 )
-_TRAIL = _wordset("is on and the a an of to for in at with or by from demo trailer official steam game games")
+_TRAIL = _wordset(
+    "is on and the a an of to for in at with or by from demo trailer official steam game games devlog devlogs "
+    "teaser playtest gameplay update announcement reveal"
+)
 
 _APOSTROPHES = re.compile(r"['’ʼ`´]")
 _NON_WORD = re.compile(r"[^\w\s]|_")
@@ -562,7 +692,9 @@ def normalize_title(title: str) -> str:
 _CAP = r"[A-Z0-9][\w'’\-]*(?:\.[A-Za-z0-9]+)*"
 _CONNECT = r"(?:of|the|and|a|an|in|to|on|at|vs\.?|&|n['’]|or|de|la|le|el|da|du|von|van|der)"
 _RUN = rf"(?<![\w'’.\-]){_CAP}(?:[ \t]+(?:{_CONNECT}[ \t]+){{0,2}}{_CAP})*"
-_T = rf"(?P<t>{_RUN})"
+# Inside the anchored patterns a run is capped at 10 words: titles are <= 6 words anyway, and an
+# unbounded run makes "<run> is a ... game" quadratic on long Title Case text (backtracking per start).
+_T = rf"(?P<t>(?<![\w'’.\-]){_CAP}(?:[ \t]+(?:{_CONNECT}[ \t]+){{0,2}}{_CAP}){{0,9}})"
 _OPEN_Q = r"[\"“'‘]?"
 _GAME_NOUN = (
     r"(?:game|experience|sim(?:ulator)?|roguelike|roguelite|shooter|platformer|adventure|puzzler|brawler|"
@@ -601,7 +733,7 @@ _PATTERNS: tuple[tuple[int, re.Pattern[str], str], ...] = (
             _T + r"(?i:(?:\s+(?:finally|now|just|officially))?\s+(?:(?:is|has)\s+)?"
             r"(?:(?:free|playable|steam|public|open|closed|first)\s+)?"
             r"(?:demo|playtest|trailer|teaser|beta|early\s+access|out\s+now|now\s+(?:available|live|out)|"
-            r"coming\s+(?:to|on)\s+steam|launch(?:es|ed|ing)?|releas(?:es|ed|ing)|"
+            r"coming\s+(?:to|on)\s+steam|launch(?:es|ed|ing)?|releas(?:es|ed|ing)|devlog|dev\s+log|"
             r"(?:got|gets|has)\s+a\s+steam\s+page|on\s+steam|steam\s+page|is\s+(?:out|live|coming))\b)"
         ),
         "run",
@@ -618,25 +750,41 @@ _PATTERNS: tuple[tuple[int, re.Pattern[str], str], ...] = (
         3,
         re.compile(
             r"(?i:\b(?:trailer|teaser|demo|playtest|(?:steam|store)\s+page|gameplay|footage|devlog|update|"
-            r"key\s*art|capsule(?:\s+art)?|soundtrack|ost|logo|screenshots?)\s+(?:for|of|from)\s+"
-            r"(?:(?:my|our)\s+game\s+)?)" + _OPEN_Q + _T
+            r"key\s*art|capsule(?:\s+art)?|soundtrack|ost|logo|screenshots?|booth|stand|panel|talk|"
+            r"post-?mortem)\s+(?:for|of|from)\s+(?:(?:my|our)\s+game\s+)?)" + _OPEN_Q + _T
+        ),
+        "run",
+    ),
+    (
+        # "Devlog #7 - Adding Proximity Chat to Spooky Shift": the object after "to" is the game
+        2,
+        re.compile(
+            r"(?i:\b(?:add(?:ing|ed|s)?|bring(?:ing|s)?|brought|put(?:ting|s)?|implement(?:ing|ed|s)?)\s+"
+            r"(?:[\w\-]+\s+){1,5}?(?:to|in|into)\s+)" + _OPEN_Q + _T
         ),
         "run",
     ),
 )
 _KEYWORD = re.compile(
-    r"(?i)\b(?:game|demo|trailer|teaser|steam|wish[\s-]?list\w*|playtest\w*|co-?op|multiplayer|early\s+access)\b"
+    r"(?i)\b(?:game|demo|trailer|teaser|steam|wish[\s-]?list\w*|playtest\w*|co-?op|multiplayer|early\s+access|"
+    r"devlogs?|dev\s+log)\b"
 )
 _COMPARISON_BEFORE = re.compile(
     r"(?i)(?:\blike|\binspired\s+by|\bmeets|\bsimilar\s+to|\bfans?\s+of|\bif\s+you\s+(?:liked?|enjoy(?:ed)?|"
-    r"love[ds]?)|\bthan|\bvs\.?|\bversus|\bmix\s+of|\bcross\s+between)\s+[\"“'‘]?$"
+    r"love[ds]?|played)|\bthan|\bvs\.?|\bversus|\bmix\s+of|\bcross\s+between|\breminds?\s+(?:me\s+|you\s+)?of|"
+    r"\bin\s+the\s+(?:style|vein|spirit)\s+of|\bsuccessor\s+to|\b(?:clone|rip-?off|knock-?off)\s+of|\bthink)"
+    r"\s+[\"“'‘]?$"
+)
+# "<Reference> but it's a pizza shop", "<Reference> meets Overcooked", "<Reference> clone / style / inspired"
+_COMPARISON_AFTER = re.compile(
+    r"(?i)^\s*[-–]?\s*(?:but|meets|clone|style|inspired|esque|vibes?|rip-?off|knock-?off|killer|wannabe)\b"
 )
 _STRIP_CHARS = " \t\r\n\"'“”‘’«»`*_~.,;:!?-–—|/#()[]{}<>"
 _SYMBOL_CATEGORIES = frozenset({"So", "Sk", "Cs", "Co", "Cf"})
 _URLISH = re.compile(
     r"(?i)(?:https?://|steam://|www\.)\S+|\b[\w.-]+\.(?:com|io|ly|co|gg|net|org|app|team)/\S*"
 )
-_TAGS = re.compile(r"(?<![\w])[#@][\w.]+")
+_TAGS = re.compile(r"(?<![\w/])(?:[#@][\w.]+|/?[ru]/[\w\-]+)")  # #tags, @handles, r/Subreddit, u/user
 _COMPARISON_WORD = re.compile(r"(?i)-(?:like|inspired|esque|style)$")
 
 
@@ -679,20 +827,65 @@ def _is_camel(word: str) -> bool:
     return bool(re.match(r"^[A-Z][a-z]+[A-Z]", word))
 
 
-def _plausible(candidate: str) -> bool:
-    """2-60 chars, <= 6 words, starts like a name, and is not a generic/reference phrase."""
+def _is_gerund(word: str) -> bool:
+    return len(word) >= 6 and word.endswith("ing") and word.isalpha() and word not in _GERUND_NOUNS
+
+
+def _plausible(candidate: str, kind: str = "run") -> bool:
+    """2-60 chars, <= 6 words, starts like a name, and is not a generic/reference/sentence phrase.
+
+    ``kind`` is where the candidate came from: "run" (a Title Case run), "segment" (a title
+    segment between separators), "quoted", "llm" or "url". Runs and segments additionally
+    reject sentence shapes: "Added Ragdolls", "Solo Dev Makes", "Making a Multiplayer Game",
+    "Adding Multiplayer to My", and runs reject "Top 10 ..." / "10 Upcoming ..." listicles.
+    """
     if not (2 <= len(candidate) <= 60) or not candidate[0].isalnum():
         return False
     words = candidate.split()
-    if len(words) > 6 or _bare(words[0]) in _PRONOUN_START:
+    lowered = [_bare(w) for w in words]
+    if len(words) > 6 or lowered[0] in _PRONOUN_START or lowered[0] in _COMPARISON_LEAD:
         return False
     if any(_COMPARISON_WORD.search(word) for word in words):
         return False
     norm = normalize_title(candidate)
     if len(norm) < 2 or norm in _GENERIC_PHRASES or norm in _REFERENCE_GAMES:
         return False
+    if norm.replace(" ", "") in _REFERENCE_COMPACT:
+        return False
     tokens = norm.split()
-    return not all(t in _GENERIC_WORDS or t.isdigit() for t in tokens)
+    if all(t in _GENERIC_WORDS or t.isdigit() for t in tokens):
+        return False
+    if kind in ("run", "segment", "quoted"):
+        listicle = len(lowered) > 1 and lowered[1] in _LISTICLE_NEXT
+        if lowered[0] == "top" or (lowered[0][:1].isdigit() and (kind == "run" or listicle)):
+            return False
+    if kind in ("run", "segment"):
+        if any(w in ("my", "our", "your") for w in lowered[1:]):
+            return False
+        if lowered[0] in _VERB_WORDS or lowered[-1] in _VERB_WORDS:
+            return False
+        if (
+            _is_gerund(lowered[0])
+            and (
+                len(words) == 1  # "Making", left over from "Making a Multiplayer Game"
+                or len(words) >= 4
+                or any(w in _FUNCTION_WORDS for w in words[1:])
+                or any(t in _FEATURE_WORDS for t in tokens[1:])
+            )
+        ):
+            return False
+    return True
+
+
+def _junky_title(norm: str) -> bool:
+    """A normalised title shaped like a sentence/listicle ("making a multiplayer game", "top 10 ...")."""
+    tokens = norm.split()
+    if not tokens:
+        return True
+    first = tokens[0]
+    if first.isdigit() or first in _VERB_WORDS or first in _GENERIC_WORDS or _is_gerund(first):
+        return True
+    return sum(t in _GENERIC_WORDS or t.isdigit() for t in tokens) * 2 >= len(tokens)
 
 
 def _clean_candidate(raw: str, kind: str) -> str | None:
@@ -703,7 +896,23 @@ def _clean_candidate(raw: str, kind: str) -> str | None:
     if not text or not (text[0].isupper() or text[0].isdigit()):
         return None
     text = text.strip(_STRIP_CHARS)
-    return text if text and _plausible(text) else None
+    return text if text and _plausible(text, kind) else None
+
+
+def _candidate_at(text: str, start: int, raw: str, kind: str) -> str | None:
+    """Clean a raw candidate found at ``start`` and reject it when the context makes it a comparison."""
+    if _COMPARISON_BEFORE.search(text[max(0, start - 40) : start]):
+        return None
+    cand = _clean_candidate(raw, kind)
+    if not cand:
+        return None
+    index = text.find(cand, start)
+    if index != -1 and (
+        _COMPARISON_BEFORE.search(text[max(0, index - 40) : index])
+        or _COMPARISON_AFTER.match(text[index + len(cand) :])
+    ):
+        return None
+    return cand
 
 
 def _prep_text(text: str) -> str:
@@ -735,7 +944,7 @@ def _segment_candidates(title: str) -> list[tuple[int, int, str]]:
         priority = 2 if any(noise) else (3 if has_pipe and pos == 0 else 0)
         if priority == 0:
             continue
-        whole = _clean_candidate(chunk, "segment")
+        whole = _candidate_at(title, pos, chunk, "segment")
         if whole:
             out.append((priority, pos, whole))
             continue
@@ -744,7 +953,7 @@ def _segment_candidates(title: str) -> list[tuple[int, int, str]]:
             runs
         ):  # e.g. "After 3 years, Gorilla Pizza Panic: Official Trailer" -> the run nearest the separator
             last = runs[-1]
-            cand = _clean_candidate(last.group(0), "run")
+            cand = _candidate_at(title, pos + last.start(), last.group(0), "run")
             if cand:
                 out.append((priority + 1, pos + last.start(), cand))
     return out
@@ -762,9 +971,9 @@ def _near_keyword_candidates(text: str, offset: int, context: str = "") -> list[
             0 if (k_start < end and k_end > start) else min(abs(k_start - end), abs(start - k_end))
             for k_start, k_end in keywords
         )
-        if distance > 60 or _COMPARISON_BEFORE.search(text[max(0, start - 30) : start]):
+        if distance > 60:
             continue
-        cand = _clean_candidate(match.group(0), "run")
+        cand = _candidate_at(text, start, match.group(0), "run")
         if not cand:
             continue
         words = cand.split()
@@ -788,7 +997,7 @@ def _scored_candidates(mention: Mention) -> list[tuple[int, int, str]]:
         return [(0, 0, title)] if title and len(title) <= 100 and normalize_title(title) else []
     out: list[tuple[int, int, str]] = []
     sources = (
-        (0, _prep_text(mention.title), True),
+        (0, _prep_text(mention.title[:MAX_TITLE_CHARS]), True),
         (_TEXT_OFFSET, _prep_text(mention.text[:MAX_TEXT_CHARS]), False),
     )
     for offset, text, is_title in sources:
@@ -799,9 +1008,7 @@ def _scored_candidates(mention: Mention) -> list[tuple[int, int, str]]:
         for priority, pattern, kind in _PATTERNS:
             for match in pattern.finditer(text):
                 start = match.start("t")
-                if _COMPARISON_BEFORE.search(text[max(0, start - 30) : start]):
-                    continue
-                cand = _clean_candidate(match.group("t"), kind)
+                cand = _candidate_at(text, start, match.group("t"), kind)
                 if cand:
                     out.append((priority, offset + start, cand))
         context = _prep_text(mention.text[:120]) if is_title else ""
@@ -847,7 +1054,9 @@ def developer_hint(mention: Mention) -> str | None:
     if mention.source == "itch":
         own = _own_hard_id(mention)
         return own.split(":", 1)[1].split("/", 1)[0] if own else (mention.author or None)
-    if mention.author and _FIRST_PERSON.search(f"{mention.title}\n{mention.text[:MAX_TEXT_CHARS]}"):
+    if mention.author and _FIRST_PERSON.search(
+        f"{mention.title[:MAX_TITLE_CHARS]}\n{mention.text[:MAX_TEXT_CHARS]}"
+    ):
         return mention.author.strip() or None
     return None
 
@@ -935,15 +1144,20 @@ def _kind(hard_id: str) -> str:
     return hard_id.split(":", 1)[0]
 
 
-def _attachable(hard: list[str]) -> list[str]:
-    """Hard ids a mention may attach to its game: all of them only for "one Steam + one itch"."""
+def _attachable(hard: list[str], same_game: Callable[[str, str], bool] | None = None) -> list[str]:
+    """Hard ids a mention may attach to its game.
+
+    Only "one Steam + one itch link" can both belong to the post's game, and only when their
+    names agree (``same_game``); otherwise just the leading id counts (e.g. a list of games,
+    or the dev's itch page next to a Steam game it is compared with).
+    """
     if len(hard) <= 1:
         return list(hard)
     steam = [h for h in hard if h.startswith("steam:")]
     itch = [h for h in hard if h.startswith("itch:")]
-    if len(steam) <= 1 and len(itch) <= 1:
-        return steam + itch
-    return [hard[0]]  # a list of several games: only the leading one is this post's game
+    if len(steam) == 1 and len(itch) == 1 and (same_game is None or same_game(steam[0], itch[0])):
+        return [hard[0], hard[1]]
+    return [hard[0]]
 
 
 def _steam_info(mention: Mention) -> SteamInfo | None:
@@ -959,10 +1173,8 @@ def _steam_info(mention: Mention) -> SteamInfo | None:
 
 
 def _mention_time(mention: Mention) -> datetime:
-    times = [mention.created_at]
-    if mention.first_seen is not None:
-        times.append(mention.first_seen)
-    return min(times)
+    """When GemBot first saw the mention (``first_seen``, set by the pipeline); else when it was posted."""
+    return mention.first_seen if mention.first_seen is not None else mention.created_at
 
 
 def _fallback_title(hard_id: str) -> str:
@@ -1003,6 +1215,28 @@ def apply_steam_info(game: Game, info: SteamInfo) -> None:
         game.publisher = info.publishers[0]
     if info.header_image:
         game.thumb = info.header_image
+
+
+def apply_llm_title(game: Game, title: str | None) -> bool:
+    """Retitle a game from an LLM verdict's ``game_title``; returns True when something changed.
+
+    Only games without an authoritative name are touched (no Steam details, no itch page),
+    and only with a plausible title (not generic, not a reference game). The old title is
+    kept as an alias so later mentions still match.
+    """
+    if (
+        not title
+        or game.steam is not None
+        or game.itch_url
+        or any(h.startswith("itch:") for h in game.hard_ids)
+    ):
+        return False
+    clean = _clean_display(title)
+    if not clean or not _plausible(clean, "llm"):
+        return False
+    before = (game.title, list(game.aliases))
+    _retitle(game, clean)
+    return (game.title, game.aliases) != before
 
 
 def title_game_id(title: str, developer: str | None = None) -> str:
@@ -1127,14 +1361,14 @@ class Resolver:
         llm = self.llm_titles.get(mention.key)
         if llm:
             llm_clean = _clean_display(llm)
-            if llm_clean and (mention.source in ("steam", "itch") or _plausible(llm_clean)):
+            if llm_clean and (mention.source in ("steam", "itch") or _plausible(llm_clean, "llm")):
                 cands.append(llm_clean)
         cands.extend(title_candidates(mention))
         if hard:
             for url in _mention_urls(mention):
                 if canonical_hard_id(url) == hard[0]:
                     derived = _title_from_url(url)
-                    if derived and _plausible(derived):
+                    if derived and _plausible(derived, "url"):
                         cands.append(derived)
         seen: set[str] = set()
         out: list[str] = []
@@ -1155,10 +1389,32 @@ class Resolver:
         gid = self._final(gid)
         return self.games.get(gid) if gid else None
 
+    def _id_names(self, hard_id: str, mention: Mention) -> list[str]:
+        """What a hard id is called: URL slugs in the post, the listing's own title, the known game."""
+        names = [
+            t
+            for url in _mention_urls(mention)
+            if canonical_hard_id(url) == hard_id and (t := _title_from_url(url))
+        ]
+        if hard_id == _own_hard_id(mention):
+            names.append(_source_title(mention))
+        owner = self.games.get(self._by_hard.get(hard_id, ""))
+        if owner is not None:
+            names.extend([owner.title, *owner.aliases])
+        return [n for n in names if n]
+
+    def _same_game(self, mention: Mention, cands: list[str]) -> Callable[[str, str], bool]:
+        def check(steam_id: str, itch_id: str) -> bool:
+            steam_names = self._id_names(steam_id, mention) or cands[:1]
+            itch_names = self._id_names(itch_id, mention) or cands[:1]
+            return any(_names_agree(a, b) for a in steam_names for b in itch_names)
+
+        return check
+
     def _resolve_one(self, mention: Mention, hard: list[str]) -> None:
-        attach = _attachable(hard)
         dev = developer_hint(mention)
         cands = self._candidates(mention, hard)
+        attach = _attachable(hard, self._same_game(mention, cands))
         game = self._existing_game(mention)
         if game is None:
             for hard_id in attach:
@@ -1213,8 +1469,8 @@ class Resolver:
         if dev_key and devs:
             if any(_dev_match(dev_key, other) for other in devs):
                 return True
-            # different known developers: only an identical, distinctive (2+ word) title merges
-            return norm == name and len(norm.split()) >= 2 and len(norm) >= 8
+            # different known developers: only an identical, distinctive (2+ word) name merges
+            return norm == name and len(norm.split()) >= 2 and len(norm) >= 8 and not _junky_title(norm)
         return ratio >= STRICT_TITLE_RATIO
 
     def _create(self, game_id: str, title: str, mention: Mention) -> Game:

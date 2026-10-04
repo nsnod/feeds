@@ -12,8 +12,10 @@ Rules:
   (``intent_commenters``, ``negative_commenters``, ``roblox_commenters``); raw comment
   counts are kept too. A comment without an author counts as its own anonymous commenter.
 * A phrase preceded by a negation in the same clause ("not a scam", "doesn't look like
-  roblox at all", "I would never play this") does not count. "Not gonna lie" is not a
-  negation. Any other comment that mentions Roblox / Fortnite Creative / UEFN counts as
+  roblox at all", "I would never play this") does not count; "but" / "though" / "yet" /
+  "however" start a new clause ("No offense but this is an asset flip" counts). "Not gonna
+  lie" is not a negation. Intent phrases asked about someone else ("Who would buy this",
+  "get people wishlisting") and "day one refund" are not intent. Any other comment that mentions Roblox / Fortnite Creative / UEFN counts as
   Roblox discourse, including "I make roblox games for a living": the meme feature
   measures attention, so being generous here is harmless.
 * ``merge_signals`` adds counts from several posts. Commenters are only distinct per
@@ -50,7 +52,14 @@ INTENT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("take my money", re.compile(r"\btake\s+(?:all\s+)?my\s+(?:money|cash|wallet)\b", _I)),
     ("need this", re.compile(r"\bneed\s+(?:this|it|that)\b", _I)),
     ("want this", re.compile(r"\bwant\s+(?:this|it|to\s+play\s+(?:this|it))\b", _I)),
-    ("day one", re.compile(r"\bday\s*(?:one|1)\b(?:\s+(?:buy|purchase|pickup|pick\s+up))?", _I)),
+    (
+        "day one",
+        re.compile(
+            r"\bday\s*(?:one|1)\b(?!\s+(?:refund\w*|patch\w*|bugs?|crash\w*|dlc|update|player\s+count))"
+            r"(?:\s+(?:buy|purchase|pickup|pick\s+up))?",
+            _I,
+        ),
+    ),
     (
         "when does it come out",
         re.compile(
@@ -90,8 +99,9 @@ INTENT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "my friends would love this",
         re.compile(
-            r"\bmy\s+(?:friends?|buddies|mates|squad|group|crew|boys|homies|gf|girlfriend|bf|boyfriend|wife|husband|"
-            r"partner)\s+(?:(?:is|are)\s+)?(?:would|will|going\s+to|gonna)\s+(?:love|enjoy|like)\b",
+            r"\b(?:my\s+(?:friends?|buddies|mates|squad|group|crew|boys|homies|gf|girlfriend|bf|boyfriend|wife|"
+            r"husband|partner)|the\s+(?:boys|bois|lads|squad|crew|gang|homies))\s+(?:(?:is|are)\s+)?"
+            r"(?:would|will|going\s+to|gonna)\s+(?:love|enjoy|like)\b",
             _I,
         ),
     ),
@@ -161,14 +171,40 @@ NEGATIVE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 ROBLOX_PATTERN = re.compile(r"\broblox|\bfortnite\s+(?:creative|map)\b|\buefn\b", _I)
 
 # A negation earlier in the same clause cancels a match ("not a scam", "doesn't look like roblox").
-_NEGATION_BEFORE = re.compile(
+# A contrast word starts a new clause: "No offense but this is an asset flip" still counts.
+_NEGATION = re.compile(
     r"(?:\b(?:not|never|no|nobody|nothing|hardly|dont|doesnt|isnt|wont|wouldnt|didnt|aint|cant)\b|\w+n['’]t\b)"
     r"[^.!?,;]{0,30}$",
     _I,
 )
+_CLAUSE_BREAK = re.compile(r"[.!?,;]|\b(?:but|though|tho|although|yet|however)\b", _I)
+# Intent that is really sarcasm ("Who would buy this") or about other people ("get people wishlisting").
+_NOT_THE_COMMENTER = re.compile(
+    r"(?:\bwho(?:\s+(?:tf|the\s+hell|even|actually|honestly|tf\s+even))?|"
+    r"\b(?:people|players|users|folks|them|others|everyone|anyone|viewers|followers))\s+$",
+    _I,
+)
 _NOT_GONNA_LIE = re.compile(r"\bnot\s+(?:gonna|going\s+to)\s+lie\b", _I)
-_BOT_NAMES = frozenset({"automoderator", "[bot]", "bot", "remindmebot", "sneakpeekbot", "repostsleuthbot"})
-_HUMAN_BOT_SUFFIX = frozenset({"talbot", "abbot", "cabot", "sabot"})
+_BOT_NAMES = frozenset(
+    {
+        "automoderator",
+        "[bot]",
+        "bot",
+        "remindmebot",
+        "sneakpeekbot",
+        "repostsleuthbot",
+        "savevideobot",
+        "savevideo",
+        "vredditdownloader",
+        "stabbot",
+        "gifreversingbot",
+        "haikusbot",
+        "wikisummarizerbot",
+        "auddbot",
+        "uwutranslator",
+    }
+)
+_CAMEL_BOT = re.compile(r"[a-z0-9]Bot$")  # RemindMeBot, SaveVideoBot (but not WorkingRobot / TheAbbot)
 _DELETED = frozenset({"", "[deleted]", "[removed]", "[deleted by user]"})
 
 
@@ -177,23 +213,31 @@ def _prepare(text: str) -> str:
 
 
 def _negated(text: str, start: int) -> bool:
-    return bool(_NEGATION_BEFORE.search(text[max(0, start - 40) : start]))
+    clause = _CLAUSE_BREAK.split(text[max(0, start - 40) : start])[-1]
+    return bool(_NEGATION.search(clause))
 
 
-def _hits(text: str, patterns: Iterable[tuple[str, re.Pattern[str]]]) -> list[str]:
+def _not_the_commenter(text: str, start: int) -> bool:
+    return bool(_NOT_THE_COMMENTER.search(text[max(0, start - 30) : start]))
+
+
+def _hits(text: str, patterns: Iterable[tuple[str, re.Pattern[str]]], *, intent: bool = False) -> list[str]:
     text = _prepare(text)
     found: list[str] = []
     for label, pattern in patterns:
         if label in found:
             continue
-        if any(not _negated(text, m.start()) for m in pattern.finditer(text)):
+        for match in pattern.finditer(text):
+            if _negated(text, match.start()) or (intent and _not_the_commenter(text, match.start())):
+                continue
             found.append(label)
+            break
     return found
 
 
 def intent_hits(text: str) -> list[str]:
     """Labels of "I want this game" phrases in one comment (wishlisted, take my money, ...)."""
-    return _hits(text, INTENT_PATTERNS)
+    return _hits(text, INTENT_PATTERNS, intent=True)
 
 
 def negative_hits(text: str) -> list[str]:
@@ -215,12 +259,14 @@ def _author_key(author: str | None) -> str:
 
 
 def is_bot_name(author: str | None) -> bool:
+    """Known bot accounts, ``*[bot]`` / ``*_bot`` / ``*-bot`` names and CamelCase ``...Bot`` names."""
     name = _author_key(author)
     if not name:
         return False
     if name in _BOT_NAMES or name.endswith(("[bot]", "_bot", "-bot", ".bot")):
         return True
-    return name.endswith("bot") and name not in _HUMAN_BOT_SUFFIX
+    original = (author or "").strip().removeprefix("/u/").removeprefix("u/").removeprefix("@")
+    return bool(_CAMEL_BOT.search(original))
 
 
 def _snippet(text: str) -> str:

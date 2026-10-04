@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from datetime import timedelta
 
 import httpx
@@ -12,6 +13,7 @@ from gembot.config import ResolverSource
 from gembot.enrich.entity import (
     LinkExpander,
     Resolver,
+    apply_llm_title,
     apply_steam_info,
     canonical_hard_id,
     developer_hint,
@@ -947,3 +949,195 @@ def test_merge_unions_hard_ids_but_keeps_the_older_store_ids():
     later = steam_mention(2, name="Beta", dev="x")
     result = resolve(games, [later])
     assert result.assignments == {later.key: "t:a"}
+
+
+# ---------------------------------------------------------------- review follow-ups
+
+
+def test_apply_llm_title_retitles_only_games_without_an_authoritative_name():
+    game = make_game("t:added-ragdolls-abc123", "Added Ragdolls")
+    assert apply_llm_title(game, "  Spooky   Shift ") is True
+    assert game.title == "Spooky Shift" and game.aliases == ["Added Ragdolls"]
+    assert apply_llm_title(game, "Spooky Shift") is False  # nothing to change
+    for title in (None, "", "Steam", "My Game", "Lethal Company", "LethalCompany", "Indie Game Demo"):
+        assert apply_llm_title(game, title) is False, title
+    assert game.title == "Spooky Shift"
+    steam_game = make_game("steam:1", "Real Steam Name", steam=SteamInfo(appid=1, name="Real Steam Name"))
+    itch_game = make_game("itch:dev/x", "Real Itch Name", hard_ids=["itch:dev/x"])
+    itch_url_game = make_game("t:x", "Real Itch Name", itch_url="https://dev.itch.io/x")
+    for authoritative in (steam_game, itch_game, itch_url_game):
+        before = authoritative.title
+        assert apply_llm_title(authoritative, "Something Else") is False
+        assert authoritative.title == before
+    linked_only = make_game("steam:2", "Steam app 2", steam_appid=2, hard_ids=["steam:2"])
+    assert apply_llm_title(linked_only, "Moss Movers") is True and linked_only.title == "Moss Movers"
+
+
+def test_game_first_seen_is_when_gembot_first_saw_it_not_when_it_was_posted():
+    itch = make_mention(
+        "itch",
+        "olddev/old-game",
+        title="Old Game",
+        url="https://olddev.itch.io/old-game",
+        created_at=NOW - timedelta(days=10),
+        first_seen=NOW,
+        author=None,
+    )
+    games: dict[str, Game] = {}
+    resolve(games, [itch])
+    assert games["itch:olddev/old-game"].first_seen == NOW
+
+
+def test_huge_title_case_titles_resolve_quickly():
+    long_title = " ".join(["Foo"] * 3000)  # ~12 KB
+    m = make_mention("reddit", "huge", title=long_title, text=" ".join(["Bar"] * 3000), author="dev")
+    start = time.perf_counter()
+    resolve({}, [m])
+    title_candidates(make_mention("youtube", "huge2", title=" ".join(["Foo Bar"] * 8000)))
+    assert time.perf_counter() - start < 1.0
+
+
+def test_steam_and_itch_links_are_bridged_only_when_their_names_agree():
+    same = make_mention(
+        "reddit",
+        "same",
+        title="Dread Shift demo is out",
+        text="https://store.steampowered.com/app/9/Dread_Shift/ and https://dreaddev.itch.io/dread-shift",
+    )
+    games: dict[str, Game] = {}
+    resolve(games, [same])
+    assert games["steam:9"].hard_ids == ["steam:9", "itch:dreaddev/dread-shift"]
+    other = make_mention(
+        "reddit",
+        "other",
+        title="Moss Movers demo is out",
+        text="https://store.steampowered.com/app/8/Gorilla_Tag_Two/ https://mossdev.itch.io/moss-movers",
+    )
+    games = {}
+    result = resolve(games, [other])
+    # the Steam slug contradicts the post's title, so the itch page leads and nothing is bridged
+    assert result.assignments[other.key] == "itch:mossdev/moss-movers"
+    assert games["itch:mossdev/moss-movers"].hard_ids == ["itch:mossdev/moss-movers"]
+    unnamed = make_mention(
+        "reddit",
+        "unnamed",
+        title="Bonk Brigade demo is out",
+        text="https://store.steampowered.com/app/7/ https://bonkdev.itch.io/bonk-brigade",
+    )
+    games = {}
+    result = resolve(games, [unnamed])  # no Steam slug: the post's own title vouches for both links
+    game = games[result.assignments[unnamed.key]]
+    assert game.game_id == "itch:bonkdev/bonk-brigade"  # the link whose slug names the game leads
+    assert game.hard_ids == ["itch:bonkdev/bonk-brigade", "steam:7"] and game.steam_appid == 7
+
+
+@pytest.mark.parametrize(
+    ("text", "kept", "dropped"),
+    [
+        ("I'd like you to try https://dreaddev.itch.io/dread-shift", "itch:dreaddev/dread-shift", None),
+        (
+            "Inspired by years of late night horror sessions with friends, we made "
+            "https://dreaddev.itch.io/dread-shift",
+            "itch:dreaddev/dread-shift",
+            None,
+        ),
+        (
+            "Fans of https://store.steampowered.com/app/1966720/ should try https://dreaddev.itch.io/dread-shift",
+            "itch:dreaddev/dread-shift",
+            "steam:1966720",
+        ),
+        (
+            "It's like R.E.P.O. (https://store.steampowered.com/app/3241660/REPO/) - ours: "
+            "https://store.steampowered.com/app/9/Dread_Shift/",
+            "steam:9",
+            "steam:3241660",
+        ),
+        (
+            "Similar to [Lethal Company](https://store.steampowered.com/app/1966720/). "
+            "Wishlist https://store.steampowered.com/app/9/",
+            "steam:9",
+            "steam:1966720",
+        ),
+    ],
+)
+def test_reference_links_are_ignored_but_ordinary_links_are_kept(text, kept, dropped):
+    mention = make_mention(
+        "reddit",
+        "ref",
+        title="Dread Shift demo",
+        text=text,
+        links=[
+            "https://store.steampowered.com/app/1966720/",
+            "https://store.steampowered.com/app/3241660/REPO/",
+        ],
+    )
+    ids = hard_ids_for(mention)
+    assert ids[0] == kept
+    if dropped:
+        assert dropped not in ids
+
+
+def test_reference_link_repeated_as_the_posts_own_link_is_kept():
+    mention = make_mention(
+        "reddit",
+        "both",
+        title="Lethal Company update",
+        text=f"Inspired by {STEAM_URL}? Wishlist {STEAM_URL}",
+    )
+    assert hard_ids_for(mention) == ["steam:777"]
+
+
+def test_truncated_display_links_are_not_extracted():
+    assert extract_urls("demo: dev.itch.io/gorilla-pizz... and store.steampowered.com/app/35272…)") == []
+    assert extract_urls("https://store.steampowered.com/app/35272... cool") == []
+    assert extract_urls("full: https://store.steampowered.com/app/352720/. Done") == [
+        "https://store.steampowered.com/app/352720/"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("title", "best"),
+    [
+        ("Cooking Chaos - Official Trailer", "Cooking Chaos"),
+        ("Shipping Simulator Deluxe is a co-op game", "Shipping Simulator Deluxe"),
+        ("Viking Party Panic demo is out!", "Viking Party Panic"),
+        ('"7 Days to Pizza" demo out now', "7 Days to Pizza"),
+        ("60 Seconds of Panic - Announce Trailer", "60 Seconds of Panic"),
+        ("Wicked Waiters demo is out", "Wicked Waiters"),
+        ("Lethal Company but with pizza: Pizza Panic demo out now", "Pizza Panic"),
+        ("Like Lethal Company? Meet Dread Shift, our co-op horror game", "Dread Shift"),
+        ("Our game Dread Shift (inspired by Lethal Company) demo is live", "Dread Shift"),
+        ("Postmortem: launching Moss Movers in Early Access", "Moss Movers"),
+        ("Bonk Brigade - Devlog #12: New Weapons", "Bonk Brigade"),
+        ("Bringing online co-op to Tiny Tavern Brawl", "Tiny Tavern Brawl"),
+    ],
+)
+def test_names_survive_the_sentence_and_comparison_filters(title, best):
+    assert title_candidates(make_mention("reddit", "x", title=title, author="dev"))[:1] == [best]
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Building a Co-op Horror Game in Unity",
+        "Adding Proximity Chat - Devlog 5",
+        "Moss Movers Clone in Unity demo",
+        "Supermarket Together style game demo",
+        "Lethal Company Inspired co-op game",
+        "Top Indie Co-op Games demo roundup",
+    ],
+)
+def test_sentences_comparisons_and_listicles_give_no_candidate(title):
+    candidates = title_candidates(make_mention("reddit", "x", title=title, author="dev"))
+    assert candidates == [], candidates
+
+
+def test_identical_but_sentence_shaped_titles_from_different_known_devs_do_not_merge():
+    games = {
+        "t:a": make_game(
+            "t:a", "Making Pizza Together", developer="dev_a", first_seen=NOW - timedelta(days=1)
+        )
+    }
+    other = make_mention("reddit", "b", title="my game Making Pizza Together demo is out", author="dev_b")
+    result = resolve(games, [other])
+    assert result.assignments[other.key] != "t:a"
