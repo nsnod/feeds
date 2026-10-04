@@ -177,13 +177,17 @@ address that lists an account's newest posts — in `config/feeds.yaml`.
 
 1. Open <https://rss.app> and **Sign up** (email or Google; no card needed).
 2. In another tab open the public account you want to follow and copy its address, e.g.
-   `https://www.instagram.com/somestudio/` or `https://www.tiktok.com/@somestudio`.
+   `https://www.instagram.com/somestudio/` or `https://www.tiktok.com/@somestudio`. This address
+   is only for RSS.app: it is not a feed, so it never goes into `config/feeds.yaml`.
 3. In RSS.app go to **My Feeds → New Feed** (top right), choose **Instagram** or **TikTok** (or use
    the general "RSS Feed Generator" box).
 4. Paste the account address → **Generate** → wait for the preview → save the feed.
 5. Copy the feed's **RSS URL**. It must look like `https://rss.app/feeds/AbCdEfGhIjKlMnOp.xml`
-   (starts with `https://rss.app/feeds/`, ends in `.xml`). Not the `.json` link and not the page
-   `https://rss.app/feed/…` without the "s" — GemBot warns you in the log if you paste one of those.
+   (starts with `https://rss.app/feeds/`, ends in `.xml`). Not the `.json` link, not the page
+   `https://rss.app/feed/…` without the "s", and not the Instagram/TikTok address from step 2. If
+   you paste one of those, the CI step **"Check your config/ folder"** turns red and tells you the
+   exact URL to use instead, and that feed is not read until you fix it (see
+   [Check your feeds](#check-your-feeds)).
 6. On GitHub open `config/feeds.yaml`, click the ✏️ pencil, and add an entry (keep the spaces
    exactly):
 
@@ -197,7 +201,8 @@ address that lists an account's newest posts — in `config/feeds.yaml`.
 
    Click **Commit changes**. The next scan uses it.
 7. **`audience`**: these feeds don't include follower numbers, so type the count you see on the
-   profile (`25000`, `25K` and `8,357` all work). It powers the "small creator, big reaction"
+   profile (`25000`, `25K` and `8,357` all work; `25.000` is read as 25000 but flagged, so write
+   `25000`). It powers the "small creator, big reaction"
    part of the score. Leave it out and that part of the score simply doesn't count for this feed
    (GemBot doesn't guess).
 
@@ -228,16 +233,29 @@ accounts.
 After you commit `config/feeds.yaml`, open the **Actions** tab: the CI run's **"Check your
 config/ folder"** step lists every feed and turns red with the exact line or feed to fix if
 something is off. The **Smoke test** summary has a **"Your feeds"** table with each feed's status
-and item count. A mistake never stops the scans: the feeds that are fine keep working, and
-`#gembot-status` lists what to fix after a few runs (and again if you fix only part of it). The
-three common mistakes:
+and item count. `#gembot-status` lists what to fix after a few runs (and again if you fix only
+part of it).
 
+What a mistake stops:
+
+- **A mistake in one feed** (a wrong URL, a missing `url:`, a typo in `source`, the same URL
+  twice) only skips that feed; your other feeds keep working.
+- **A YAML mistake** (a tab, a missing quote, a wrongly indented line) pauses all your feeds
+  until it is fixed, because the file can't be read at all. The problem names the line to fix.
+- Steam, itch, Reddit and Bluesky keep running either way.
+
+Common mistakes:
+
+- **A feed added without its `- `** in front of `name:`. It is still read, but add the `- `, in
+  line with the `- ` of the feed above.
 - **An extra or indented `feeds:` line** inside a feed (e.g. under `audience:`). Delete it (and
   move any feeds indented under it back in line with the others): the file has exactly one
   `feeds:` line, at the very top.
 - **A second `feeds:` line** further down (e.g. `feeds: [2]` at the end, or the example block at
-  the top uncommented). Its feeds still load, but delete the line the problem names so every feed
-  sits under one `feeds:`. The example's placeholder URLs (`XXXX…`, `UCxxxx…`) are never fetched.
+  the top uncommented). Its feeds still load; follow the problem's advice so every feed sits under
+  one `feeds:`. The example's placeholder URLs (`XXXX…`, `UCxxxx…`) are never fetched.
+- **The account's page instead of its feed** (`instagram.com/…`, `tiktok.com/@…`) or a URL
+  without `https://`. Paste the RSS.app feed URL from step 5, starting with `https://`.
 - **`UC` pasted twice** in a YouTube channel ID (`channel_id=UCUCxsk…`). The ID is 24
   characters and starts with a single `UC`.
 
@@ -315,11 +333,12 @@ GemBot stays quiet there unless something changes:
 | ✅ ok | worked |
 | ⚠️ partial | some requests failed (e.g. one feed), the rest worked |
 | ❌ failed | nothing worked — the note says why (blocked, rate-limited, bad secret, …) |
-| ❌ config problem | a mistake in `config/feeds.yaml` (the feeds that are fine still ran) — the **Your feeds** table says what to fix |
+| ❌ config problem | a mistake in `config/feeds.yaml` — the **Your feeds** table says what to fix. A mistake in one feed only skips that feed; a YAML mistake (a tab, a missing quote) means no feed ran until it is fixed |
 | ⏭️ skipped | turned off or missing its secret (e.g. X without `X_BEARER_TOKEN`) — not an error |
 
-Below it: the **Your feeds** table (one row per feed in `config/feeds.yaml`: ok with its item
-count, warning, error, paused, skipped, or *fix feeds.yaml*), the top 10 games it would score
+Below it: the **Your feeds** table (one row per feed in `config/feeds.yaml`, plus one per mistake
+in the file: ok with its item count, warning, error, paused, skipped, or *fix feeds.yaml* — a URL
+or line to fix, not requested until you do), the top 10 games it would score
 right now, what it *would* have posted (nothing is posted unless you ticked `post_test`), and the
 run time. A smoke run never changes the bot's state.
 
