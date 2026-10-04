@@ -1,9 +1,13 @@
 """RSS slot: Instagram / TikTok (through RSS.app), YouTube channel feeds and any RSS/Atom feed.
 
-Every enabled entry of ``config/feeds.yaml`` is one unit of work:
+Mistakes in ``config/feeds.yaml`` (``config.feeds.problems``: a repeated key, a stray
+indented ``feeds:`` line, an entry without a url...) are reported as errors every run while
+the valid feeds are still collected; the report is then not OK, so the status channel hears
+about it after a few runs. Every enabled entry of ``config/feeds.yaml`` is one unit of work:
 
-1. lint the URL: the RSS.app viewer page (``rss.app/feed/<id>``), JSON feeds and YouTube
-   channel pages are not RSS; the error tells the user which URL to paste instead;
+1. lint the URL: the RSS.app viewer page (``rss.app/feed/<id>``), JSON feeds, YouTube
+   channel pages and malformed YouTube channel ids are not feeds; the error tells the user
+   which URL to paste instead (and counts as a config mistake);
 2. conditional GET (ETag / Last-Modified); ``304 Not Modified`` means "nothing new". At most
    one retry and ``MAX_FEED_BYTES`` per body. A host that answers 429 is not asked again this
    run: its remaining feeds are skipped with one error (many feeds share rss.app);
@@ -14,6 +18,9 @@ Every enabled entry of ``config/feeds.yaml`` is one unit of work:
    the feed is labelled with (``instagram`` / ``tiktok`` / ``youtube`` / ``rss`` / ...).
    Text fields are clipped to ``MAX_HTML_CHARS`` and every regex here is linear, so a hostile
    feed costs time in proportion to its (capped) size. A malformed URL drops that URL only.
+
+Each entry's outcome (ok + item count, warning, error, paused, skipped) is recorded in
+``report.feed_results`` for the smoke summary's "Your feeds" table.
 
 These feeds carry little engagement data. RSS.app items have none
 (``extra["engagement_known"] = False``); YouTube feeds expose likes (``media:starRating``)
@@ -30,15 +37,15 @@ import re
 from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qs, urljoin, urlsplit
 
 import feedparser
 import httpx
 from feedparser.exceptions import ThingsNobodyCaresAboutButMe
 
-from gembot.collectors.base import CollectContext, Collector
+from gembot.collectors.base import CollectContext, Collector, FeedResult
 from gembot.config import FeedConfig
-from gembot.http import Budget, HttpError, RateLimited
+from gembot.http import Budget, BudgetExceeded, HttpError, RateLimited
 from gembot.models import Engagement, Mention
 
 MAX_ENTRY_AGE = timedelta(days=30)  # feeds keep old posts around; ignore anything older
@@ -57,12 +64,17 @@ GENERIC_AUTHORS = frozenset(
 SOCIAL_SOURCES = frozenset({"instagram", "tiktok"})
 YOUTUBE_HOSTS = frozenset({"youtube.com", "youtu.be"})
 YOUTUBE_FEED_HINT = "needs a feeds/videos.xml?channel_id=UC... URL (https://www.youtube.com/feeds/videos.xml?channel_id=UC...)"
+YOUTUBE_ID_RULE = "YouTube channel ids are 24 characters and start with UC"
+PAUSED_NOTE = "enabled: false in feeds.yaml"
 
 _ID_RE = re.compile(r"[A-Za-z0-9._~:/@+-]+")
 _YT_VIDEO_RE = re.compile(
     r"(?:youtube\.com/(?:watch\?(?:[^#\s]*&)?v=|shorts/|live/|embed/)|youtu\.be/)([\w-]{11})(?![\w-])", re.I
 )
-_YT_CHANNEL_PAGE_RE = re.compile(r"^/channel/(UC[\w-]{22})/?")
+_YT_CHANNEL_PAGE_RE = re.compile(r"^/channel/([^/]*)")
+_YT_CHANNEL_ID_RE = re.compile(r"UC[A-Za-z0-9_-]{22}")  # fullmatch: "UC" + 22 more, 24 in all
+_YT_ID_CHARS_RE = re.compile(r"[A-Za-z0-9_-]+")
+_PLACEHOLDER_RE = re.compile(r"[xX]{8,}")  # the example feeds in feeds.yaml: rss.app/feeds/XXXX..., UCxxxx...
 _INSTAGRAM_POST_RE = re.compile(r"instagram\.com/(?:[\w.]+/)?(?:p|reels?|tv)/([\w-]+)", re.I)
 _TIKTOK_POST_RE = re.compile(r"tiktok\.com/@([\w.-]+)/(?:video|photo)/(\d+)", re.I)
 _PROFILE_RE = re.compile(
@@ -112,9 +124,12 @@ class RssCollector(Collector):
     def __init__(self, ctx: CollectContext, budget: Budget | None = None):
         super().__init__(ctx, budget)
         self._limited_hosts: set[str] = set()  # hosts that answered 429 this run
+        self._feed_note = ""  # set by collect_feed: a 304 or old posts left out (for feed_results)
 
     def enabled(self) -> tuple[bool, str | None]:
         feeds = self.config.feeds.feeds
+        if self.config.feeds.problems:
+            return True, None  # mistakes in feeds.yaml are reported as a failure, never "skipped"
         if not feeds:
             return False, "no feeds in config/feeds.yaml"
         if not any(feed.enabled for feed in feeds):
@@ -122,17 +137,79 @@ class RssCollector(Collector):
         return True, None
 
     def collect(self) -> list[Mention]:
-        feeds = [feed for feed in self.config.feeds.feeds if feed.enabled]
-        for index, feed in enumerate(feeds):
-            host = _host(feed.url)
-            if host in self._limited_hosts:
-                continue  # reported once, when the host answered 429
-            with self.guard(f"feed '{feed.name}'"):
-                self.found.extend(self.collect_feed(feed))
-            if host in self._limited_hosts:
-                same_host = [later.name for later in feeds[index + 1 :] if _host(later.url) == host]
-                self._skip_host(host, same_host)
+        try:
+            self._collect_feeds()
+        finally:
+            # last, so the status channel's "Last error" quotes the mistake in feeds.yaml
+            self._report_config_problems()
         return self.found
+
+    def _collect_feeds(self) -> None:
+        feeds = self.config.feeds.feeds
+        for index, feed in enumerate(feeds):
+            if not feed.enabled:
+                self._feed_result(feed, "paused", note=PAUSED_NOTE)
+                continue
+            host = _host(feed.url)
+            if host in self._limited_hosts:  # the error is reported once, when the host answered 429
+                self._feed_result(feed, "skipped", note=f"not requested: {host} answered HTTP 429 this run")
+                continue
+            try:
+                self._collect_one(feed)
+            except BudgetExceeded as exc:  # out of requests or out of time: say which
+                note = "not requested: " + str(exc).removeprefix(f"{self.budget.name}: ")
+                for later in feeds[index:]:
+                    if later.enabled:
+                        self._feed_result(later, "skipped", note=note)
+                    else:
+                        self._feed_result(later, "paused", note=PAUSED_NOTE)
+                raise
+            if host in self._limited_hosts:
+                same_host = [
+                    later.name for later in feeds[index + 1 :] if later.enabled and _host(later.url) == host
+                ]
+                self._skip_host(host, same_host)
+
+    def _collect_one(self, feed: FeedConfig) -> None:
+        """``collect_feed`` inside ``guard``, plus this feed's row in ``report.feed_results``."""
+        label = f"feed '{feed.name}'"
+        errors, warnings = len(self.report.errors), len(self.report.warnings)
+        mentions: list[Mention] = []
+        bad_url = False
+        self._feed_note = ""
+        with self.guard(label):
+            try:
+                mentions = self.collect_feed(feed)
+            except BadFeedUrl as exc:  # this URL can never work: feeds.yaml needs fixing
+                bad_url = True
+                self.report.config_problems.append(f"config/feeds.yaml: {label}: {exc}")
+                raise
+            self.found.extend(mentions)
+        new_errors = [_unlabelled(text, label) for text in self.report.errors[errors:]]
+        if new_errors:
+            self._feed_result(feed, "config" if bad_url else "error", note=new_errors[0])
+            return
+        notes = [_unlabelled(text, label) for text in self.report.warnings[warnings:]]
+        if self._feed_note:
+            notes.append(self._feed_note)
+        status = "warning" if len(self.report.warnings) > warnings else "ok"
+        self._feed_result(feed, status, items=len(mentions), note="; ".join(notes))
+
+    def _feed_result(self, feed: FeedConfig, status: str, *, items: int = 0, note: str = "") -> None:
+        self.report.feed_results.append(FeedResult(feed.name, feed.source, status, items=items, note=note))
+
+    def _report_config_problems(self) -> None:
+        """Each mistake found in feeds.yaml is an error (every run, until it is fixed) and a row
+        at the top of the feeds table; they come before the bad URLs in ``config_problems``."""
+        rows: list[FeedResult] = []
+        texts: list[str] = []
+        for problem in self.config.feeds.problems:
+            texts.append(f"config/feeds.yaml: {problem}")
+            self.log.warning("config/feeds.yaml: %s", problem)
+            rows.append(FeedResult("config/feeds.yaml", "", "config", note=problem))
+        self.report.errors += texts
+        self.report.config_problems[:0] = texts
+        self.report.feed_results[:0] = rows
 
     def _skip_host(self, host: str, names: list[str]) -> None:
         """One error for every later feed on a host that said 429 (they are not requested)."""
@@ -153,6 +230,7 @@ class RssCollector(Collector):
         response = self._fetch(url)
         if response.status_code == 304:
             self.log.debug("%s: not modified", label)
+            self._feed_note = "nothing new since the last run (HTTP 304)"
             return []
         parsed = parse_feed(response.content)
         problem = _bozo_problem(parsed)
@@ -175,6 +253,8 @@ class RssCollector(Collector):
             mentions.append(mention)
         if bad:
             self.report.warnings.append(f"{label}: skipped {bad} unreadable entr{'y' if bad == 1 else 'ies'}")
+        if old:
+            self._feed_note = f"{old} post(s) older than {MAX_ENTRY_AGE.days} days left out"
         self.log.info(
             "%s: %d items (%d older than %d days skipped)", label, len(mentions), old, MAX_ENTRY_AGE.days
         )
@@ -194,7 +274,10 @@ class RssCollector(Collector):
             if isinstance(exc, RateLimited) or exc.status == 429:
                 self._limited_hosts.add(_host(url))
             elif exc.status == 404 and _host(url) in YOUTUBE_HOSTS:
-                hint = f"{exc} (YouTube feeds return 404 now and then; retried next run)"
+                hint = (
+                    f"{exc} (YouTube feeds return 404 now and then; retried next run. If every run says "
+                    "this, open the URL in a browser to check the channel_id)"
+                )
                 raise HttpError(hint, exc.status, exc.url) from exc
             raise
 
@@ -208,7 +291,10 @@ def check_feed_url(url: str) -> tuple[str, str | None]:
     """Return ``(url_to_fetch, warning)``; raise :class:`BadFeedUrl` for URLs that are not feeds.
 
     A YouTube ``/channel/UC...`` page is rewritten to its feed URL (with a warning); RSS.app
-    viewer pages, JSON feeds and YouTube ``@handle`` / ``/c/`` / ``/user/`` pages are errors.
+    viewer pages, JSON feeds, YouTube ``@handle`` / ``/c/`` / ``/user/`` pages, a YouTube
+    ``channel_id`` that is not ``UC`` + 22 letters/digits/``_``/``-`` and the ``XXXX...``
+    placeholders of the example feeds are errors. Offline: this never makes a request
+    (``check-config`` runs it too).
     """
     raw = url.strip()
     try:
@@ -217,6 +303,10 @@ def check_feed_url(url: str) -> tuple[str, str | None]:
         raise BadFeedUrl(f"not a valid URL: {raw!r}") from None
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise BadFeedUrl(f"not an http(s) URL: {raw!r}")
+    if _PLACEHOLDER_RE.search(f"{parts.path}?{parts.query}"):
+        raise BadFeedUrl(
+            f"this is an example URL (the XXXX... part is a placeholder); put your own feed URL here (got {raw})"
+        )
     host = _host(raw)
     path = parts.path
     if host == "rss.app":
@@ -226,15 +316,50 @@ def check_feed_url(url: str) -> tuple[str, str | None]:
         return raw, None
     if host in YOUTUBE_HOSTS:
         if path == "/feeds/videos.xml":
+            query = parse_qs(parts.query, keep_blank_values=True)
+            if "channel_id" in query:
+                problem = youtube_channel_id_problem(query["channel_id"][0])
+                if problem:
+                    raise BadFeedUrl(f"{problem} (got {raw})")
+            elif not query.keys() & {"playlist_id", "user"}:
+                raise BadFeedUrl(f"{YOUTUBE_FEED_HINT}, got {raw}")
             return raw, None
         match = _YT_CHANNEL_PAGE_RE.match(path) if host == "youtube.com" else None
         if match:
+            problem = youtube_channel_id_problem(match.group(1))
+            if problem:
+                raise BadFeedUrl(f"{problem} (got {raw})")
             fixed = f"https://www.youtube.com/feeds/videos.xml?channel_id={match.group(1)}"
             return fixed, f"{raw} is a channel page, fetched {fixed} instead (put that URL in feeds.yaml)"
         raise BadFeedUrl(f"{YOUTUBE_FEED_HINT}, got {raw}")
     if path.lower().endswith(".json"):
         raise BadFeedUrl(f"JSON feeds are not supported, use the RSS/Atom (.xml) URL (got {raw})")
     return raw, None
+
+
+def youtube_channel_id_problem(value: str) -> str | None:
+    """Why ``value`` cannot be a YouTube channel id, in plain words (None when it can be).
+
+    Only the shape is checked (offline): ``UC`` + 22 letters, digits, ``_`` or ``-``.
+    """
+    if _YT_CHANNEL_ID_RE.fullmatch(value):
+        return None
+    if not value:
+        return f"channel_id is empty; {YOUTUBE_ID_RULE}"
+    if value.startswith("@"):
+        return f"channel_id {value!r} is a handle, not the channel id; {YOUTUBE_ID_RULE}"
+    if not _YT_ID_CHARS_RE.fullmatch(value):
+        return f"channel_id has characters a channel id never contains (only letters, digits, _ and -); {YOUTUBE_ID_RULE}"
+    if len(value) != 24:
+        hint = ""
+        if value.startswith("UCUC"):
+            hint = " (was 'UC' pasted twice?)"
+            if _YT_CHANNEL_ID_RE.fullmatch(value[2:]):
+                hint += f" - try channel_id={value[2:]}"
+        elif len(value) == 22 and not value.startswith("UC"):
+            hint = f" (is the 'UC' at the start missing?) - try channel_id=UC{value}"
+        return f"channel_id is {len(value)} characters; YouTube channel ids are 24 and start with UC{hint}"
+    return f"channel_id does not start with UC; {YOUTUBE_ID_RULE}"
 
 
 def parse_feed(body: bytes) -> feedparser.FeedParserDict:
@@ -525,6 +650,15 @@ def _drop_comments(value: str) -> str:
         pos = end + 3
     out.append(value[pos:])
     return "".join(out)
+
+
+def _unlabelled(text: str, label: str) -> str:
+    """An error / warning without its ``feed '...': `` and exception-name prefixes (the feeds
+    table already names the feed and its status)."""
+    text = text.removeprefix(f"{label}: ")
+    for kind in (BadFeedUrl, NotAFeed):
+        text = text.removeprefix(f"{kind.__name__}: ")
+    return text
 
 
 def _one_line(value: str) -> str:

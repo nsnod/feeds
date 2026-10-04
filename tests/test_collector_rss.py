@@ -9,7 +9,7 @@ import pytest
 import respx
 
 from gembot.collectors import rss as rss_module
-from gembot.collectors.base import CollectContext
+from gembot.collectors.base import CollectContext, FeedResult
 from gembot.collectors.rss import (
     MAX_ENTRY_AGE,
     BadFeedUrl,
@@ -335,7 +335,10 @@ def test_url_lint_errors_are_recorded_per_feed_and_other_feeds_still_collected()
     respx.get(YT.url).mock(return_value=xml_response(body("youtube_channel.xml")))
     mentions, report = run(*bad[:3], YT, *bad[3:])  # respx would reject any request to a bad URL
     assert len(mentions) == 3
-    assert report.ok_units == 1 and report.failed_units == 7 and report.ok
+    assert report.ok_units == 1 and report.failed_units == 7
+    # a URL that can never work is a mistake in feeds.yaml: not OK until fixed (status alert)
+    assert report.config_errors == 7 and not report.ok
+    assert [row.status for row in report.feed_results] == ["config"] * 3 + ["ok"] + ["config"] * 4
     errors = report.errors
     assert errors[0].startswith(
         "feed 'viewer': BadFeedUrl: use the https://rss.app/feeds/AbCdEfGhIjKlMnOp.xml RSS URL"
@@ -982,3 +985,195 @@ def test_long_fields_are_clipped_before_regex_work():
     # the Mention model keeps titles to MAX_TITLE_CHARS on top of the collector's clip
     assert len(mention.title) == MAX_TITLE_CHARS and len(mention.text) == rss_module.MAX_TEXT_CHARS
     assert mention.links == ["https://b.example.com/post"]  # the href past the limit is not read
+
+
+# ------------------------------------------------------------------ YouTube channel ids
+
+
+@pytest.mark.parametrize(
+    ("url", "message"),
+    [
+        (
+            "https://www.youtube.com/feeds/videos.xml?channel_id=UCUCxsk7hqE_CwZWGEJEkGanbA",
+            "channel_id is 26 characters; YouTube channel ids are 24 and start with UC (was 'UC' pasted "
+            "twice?) - try channel_id=UCxsk7hqE_CwZWGEJEkGanbA (got https://www.youtube.com/feeds/videos.xml"
+            "?channel_id=UCUCxsk7hqE_CwZWGEJEkGanbA)",
+        ),
+        (
+            "https://www.youtube.com/feeds/videos.xml?channel_id=UCUCabc",
+            "channel_id is 7 characters; YouTube channel ids are 24 and start with UC (was 'UC' pasted twice?) (got",
+        ),
+        (
+            "https://www.youtube.com/feeds/videos.xml?channel_id=UCabcdefghijklmnopqrstu",
+            "channel_id is 23 characters; YouTube channel ids are 24 and start with UC (got",
+        ),
+        (
+            "https://www.youtube.com/feeds/videos.xml?channel_id=abcdefghijklmnopqrstuv",
+            "channel_id is 22 characters; YouTube channel ids are 24 and start with UC (is the 'UC' at the "
+            "start missing?) - try channel_id=UCabcdefghijklmnopqrstuv",
+        ),
+        (
+            "https://www.youtube.com/feeds/videos.xml?channel_id=XXabcdefghijklmnopqrstuv",
+            "channel_id does not start with UC; YouTube channel ids are 24 characters and start with UC",
+        ),
+        (
+            "https://www.youtube.com/feeds/videos.xml?channel_id=@tinypixel",
+            "channel_id '@tinypixel' is a handle, not the channel id",
+        ),
+        ("https://www.youtube.com/feeds/videos.xml?channel_id=", "channel_id is empty"),
+        (
+            "https://www.youtube.com/feeds/videos.xml?channel_id=UCabcdefghijklmnopqrst%20v",
+            "channel_id has characters a channel id never contains",
+        ),
+        ("https://www.youtube.com/feeds/videos.xml", "needs a feeds/videos.xml?channel_id=UC... URL"),
+        (  # the examples at the top of feeds.yaml, uncommented as they are
+            "https://www.youtube.com/feeds/videos.xml?channel_id=UCxxxxxxxxxxxxxxxxxxxxxx",
+            "this is an example URL (the XXXX... part is a placeholder); put your own feed URL here (got",
+        ),
+        ("https://rss.app/feeds/XXXXXXXXXXXXXXXX.xml", "this is an example URL"),
+        (
+            "https://www.youtube.com/channel/UCUCxsk7hqE_CwZWGEJEkGanbA",
+            "channel_id is 26 characters; YouTube channel ids are 24 and start with UC (was 'UC' pasted twice?)",
+        ),
+    ],
+)
+def test_youtube_channel_ids_are_checked_offline(url, message):
+    with pytest.raises(BadFeedUrl) as caught:
+        check_feed_url(url)
+    assert str(caught.value).startswith(message)
+
+
+def test_youtube_feed_urls_by_user_or_playlist_and_good_channel_pages_pass():
+    user = "https://www.youtube.com/feeds/videos.xml?user=tinypixel"
+    assert check_feed_url(user) == (user, None)
+    fixed, warning = check_feed_url("https://youtube.com/channel/UCxsk7hqE_CwZWGEJEkGanbA/videos")
+    assert fixed == "https://www.youtube.com/feeds/videos.xml?channel_id=UCxsk7hqE_CwZWGEJEkGanbA"
+    assert warning and "is a channel page" in warning
+
+
+# ------------------------------------------------------------------ feeds.yaml mistakes, per-feed results
+
+
+def collector_for(feeds: Feeds, *, http=None, budget: Budget | None = None) -> RssCollector:
+    config = make_config(feeds=feeds)
+    return RssCollector(CollectContext(config=config, http=http or make_http(), now=NOW), budget=budget)
+
+
+@respx.mock
+def test_feeds_yaml_problems_are_errors_while_the_valid_feeds_are_still_collected():
+    respx.get(IG.url).mock(return_value=xml_response(body("rssapp_instagram.xml")))
+    problem = "line 9: 'feeds' appears again (first on line 2); ignored - remove the extra line"
+    mentions, report = collector_for(Feeds(feeds=[IG], problems=[problem])).run()
+    assert len(mentions) == 3 and report.ok_units == 1 and report.mentions == 3
+    assert report.errors == report.config_problems == [f"config/feeds.yaml: {problem}"]
+    assert report.config_errors == 1 and not report.ok  # until fixed: the status channel hears of it
+    assert report.summary() == "rss: FAILED, 3 mentions, 1 requests; 1 error(s)"
+    assert report.feed_results == [
+        FeedResult("config/feeds.yaml", "", "config", note=problem),
+        FeedResult(IG.name, "instagram", "ok", items=3),
+    ]
+
+
+def test_problems_without_a_usable_feed_are_a_failure_not_skipped_no_feeds():
+    problem = "line 1: 'feeds' must be a list of feeds, each starting with '- name:' (found the number 2)"
+    collector = collector_for(Feeds(problems=[problem]))
+    assert collector.enabled() == (True, None)
+    mentions, report = collector.run()
+    assert mentions == [] and not report.skipped and not report.ok
+    assert report.errors == [f"config/feeds.yaml: {problem}"] and report.requests == 0
+    assert report.summary() == "rss: FAILED, 0 mentions, 0 requests; 1 error(s)"
+
+
+def test_problems_with_only_paused_feeds_are_still_reported():
+    paused = BLOG.model_copy(update={"enabled": False})
+    mentions, report = collector_for(Feeds(feeds=[paused], problems=["line 4: oops"])).run()
+    assert mentions == [] and not report.skipped and not report.ok
+    assert [(row.feed, row.status) for row in report.feed_results] == [
+        ("config/feeds.yaml", "config"),
+        ("Friendslop Weekly", "paused"),
+    ]
+
+
+def test_every_feed_gets_a_result_row():
+    youtube_typo = FeedConfig(
+        name="Typo",
+        url="https://www.youtube.com/feeds/videos.xml?channel_id=UCUCxsk7hqE_CwZWGEJEkGanbA",
+        source="youtube",
+    )
+    gone = FeedConfig(name="Gone blog", url="https://gone.example.com/feed.xml")
+    broken = FeedConfig(name="Half a feed", url="https://broken.example.com/feed.xml")
+    paused = ATOM.model_copy(update={"enabled": False})
+    truncated = body("generic_blog.rss").split(b"<item>\n<title>Screenshot")[0]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "rss.app":
+            return httpx.Response(429, headers={"Retry-After": "600"})  # IG fails, TT is not asked
+        if request.url.host == "gone.example.com":
+            return httpx.Response(404)
+        if request.url.host == "broken.example.com":
+            return xml_response(truncated)
+        return xml_response(body("generic_blog.rss"))
+
+    http = make_http(httpx.MockTransport(handler))
+    feeds = Feeds(feeds=[BLOG, IG, TT, paused, youtube_typo, gone, broken])
+    mentions, report = collector_for(feeds, http=http).run()
+    assert len(mentions) == 2  # "Half a feed" repeats one of the blog's posts (kept once)
+    rows = [(row.feed, row.platform, row.status, row.items) for row in report.feed_results]
+    assert rows == [
+        ("Friendslop Weekly", "rss", "ok", 2),
+        ("Lighthouse (Instagram)", "instagram", "error", 0),
+        ("Lighthouse (TikTok)", "tiktok", "skipped", 0),
+        ("Co-op Corner", "rss", "paused", 0),
+        ("Typo", "youtube", "config", 0),
+        ("Gone blog", "rss", "error", 0),
+        ("Half a feed", "rss", "warning", 1),
+    ]
+    notes = {row.feed: row.note for row in report.feed_results}
+    assert notes["Friendslop Weekly"] == "1 post(s) older than 30 days left out"
+    assert notes["Lighthouse (Instagram)"].startswith("rss: rate limited (429)")
+    assert notes["Lighthouse (TikTok)"] == "not requested: rss.app answered HTTP 429 this run"
+    assert notes["Co-op Corner"] == "enabled: false in feeds.yaml"
+    assert notes["Typo"].startswith("channel_id is 26 characters")  # no "feed 'Typo': BadFeedUrl:" prefix
+    assert "HTTP 404" in notes["Gone blog"]
+    assert notes["Half a feed"].startswith("malformed feed, kept what could be read")
+    assert report.config_errors == 1 and not report.ok  # the bad channel id never fixes itself
+    assert report.config_problems[0].startswith(
+        "config/feeds.yaml: feed 'Typo': channel_id is 26 characters; YouTube channel ids are 24"
+    )
+
+
+@respx.mock
+def test_feeds_left_when_the_budget_runs_out_are_listed_as_skipped():
+    other = FeedConfig(name="Other blog", url="https://other.example.com/rss")
+    paused = ATOM.model_copy(update={"enabled": False})
+    respx.get(IG.url).mock(return_value=xml_response(body("rssapp_instagram.xml")))
+    feeds = Feeds(feeds=[IG, TT, paused, other])
+    mentions, report = collector_for(feeds, budget=Budget("rss", 1)).run()
+    assert len(mentions) == 3 and "budget" in report.warnings[0]
+    assert [(row.feed, row.status) for row in report.feed_results] == [
+        ("Lighthouse (Instagram)", "ok"),
+        ("Lighthouse (TikTok)", "skipped"),
+        ("Co-op Corner", "paused"),
+        ("Other blog", "skipped"),
+    ]
+    assert report.feed_results[1].note == "not requested: request budget of 1 used up for this run"
+
+
+def test_feeds_left_when_the_run_is_out_of_time_say_so():
+    budget = Budget("rss", 50)
+    budget.deadline = time.monotonic() - 1  # the collect stage's time is up
+    _, report = collector_for(Feeds(feeds=[IG, TT]), budget=budget).run()
+    assert "out of time" in report.warnings[0] and report.requests == 0
+    assert [(row.status, row.note) for row in report.feed_results] == [
+        ("skipped", "not requested: out of time for this run (other steps still need the time)")
+    ] * 2  # not "the request budget ran out": raising it would not help
+
+
+@respx.mock
+def test_a_304_is_ok_with_a_note():
+    respx.get(IG.url).mock(return_value=httpx.Response(304))
+    _, report = collector_for(Feeds(feeds=[IG])).run()
+    assert report.feed_results == [
+        FeedResult(IG.name, "instagram", "ok", items=0, note="nothing new since the last run (HTTP 304)")
+    ]
+    assert report.ok and report.errors == []

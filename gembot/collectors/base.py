@@ -33,6 +33,17 @@ if TYPE_CHECKING:
 
 
 @dataclass
+class FeedResult:
+    """How one ``config/feeds.yaml`` entry did this run (the smoke summary's "Your feeds" table)."""
+
+    feed: str
+    platform: str
+    status: str  # ok | warning | error | paused | skipped | config (a mistake in feeds.yaml)
+    items: int = 0
+    note: str = ""
+
+
+@dataclass
 class SourceReport:
     source: str
     requests: int = 0
@@ -43,16 +54,27 @@ class SourceReport:
     skip_reason: str | None = None
     ok_units: int = 0  # units of work (feeds, subreddits, searches) that succeeded
     failed_units: int = 0
+    # the ``errors`` that are mistakes in the user's config/ files (the status alert lists them)
+    config_problems: list[str] = field(default_factory=list)
+    feed_results: list[FeedResult] = field(default_factory=list)  # RSS only: one row per feed
+
+    @property
+    def config_errors(self) -> int:
+        return len(self.config_problems)
 
     @property
     def ok(self) -> bool:
         """A run is healthy if it was skipped on purpose or produced no hard errors.
 
         Partial failures (e.g. 1 of 11 subreddits failed) still count as OK as long as
-        at least one unit succeeded; see ``failed_units``/``ok_units``.
+        at least one unit succeeded; see ``failed_units``/``ok_units``. A mistake in the
+        config (``config_errors``) never fixes itself, so it is not OK even then: after a
+        few runs the pipeline posts it to the status channel.
         """
         if self.skipped:
             return True
+        if self.config_errors:
+            return False
         if not self.errors:
             return True
         return self.ok_units > 0

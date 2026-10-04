@@ -197,9 +197,9 @@ address that lists an account's newest posts — in `config/feeds.yaml`.
 
    Click **Commit changes**. The next scan uses it.
 7. **`audience`**: these feeds don't include follower numbers, so type the count you see on the
-   profile (write `25000`, not `25K`). It powers the "small creator, big reaction" part of the
-   score. Leave it out and that part of the score simply doesn't count for this feed (GemBot
-   doesn't guess).
+   profile (`25000`, `25K` and `8,357` all work). It powers the "small creator, big reaction"
+   part of the score. Leave it out and that part of the score simply doesn't count for this feed
+   (GemBot doesn't guess).
 
 **RSS.app limits (checked Oct 2026; prices change, see rss.app/pricing):** the **Free plan** allows
 **2 feeds**, refreshed **once every 24 hours**, showing the latest **5 posts**. Paid plans start
@@ -222,6 +222,24 @@ accounts.
 2. Your feed URL is `https://www.youtube.com/feeds/videos.xml?channel_id=UC…your ID…`
 3. Add it to `config/feeds.yaml` with `source: youtube`. YouTube feeds include view and like
    counts; `audience` (subscriber count) is optional.
+
+### Check your feeds
+
+After you commit `config/feeds.yaml`, open the **Actions** tab: the CI run's **"Check your
+config/ folder"** step lists every feed and turns red with the exact line or feed to fix if
+something is off. The **Smoke test** summary has a **"Your feeds"** table with each feed's status
+and item count. A mistake never stops the scans: the feeds that are fine keep working, and
+`#gembot-status` lists what to fix after a few runs (and again if you fix only part of it). The
+three common mistakes:
+
+- **An extra or indented `feeds:` line** inside a feed (e.g. under `audience:`). Delete it (and
+  move any feeds indented under it back in line with the others): the file has exactly one
+  `feeds:` line, at the very top.
+- **A second `feeds:` line** further down (e.g. `feeds: [2]` at the end, or the example block at
+  the top uncommented). Its feeds still load, but delete the line the problem names so every feed
+  sits under one `feeds:`. The example's placeholder URLs (`XXXX…`, `UCxxxx…`) are never fetched.
+- **`UC` pasted twice** in a YouTube channel ID (`channel_id=UCUCxsk…`). The ID is 24
+  characters and starts with a single `UC`.
 
 ---
 
@@ -297,10 +315,13 @@ GemBot stays quiet there unless something changes:
 | ✅ ok | worked |
 | ⚠️ partial | some requests failed (e.g. one feed), the rest worked |
 | ❌ failed | nothing worked — the note says why (blocked, rate-limited, bad secret, …) |
+| ❌ config problem | a mistake in `config/feeds.yaml` (the feeds that are fine still ran) — the **Your feeds** table says what to fix |
 | ⏭️ skipped | turned off or missing its secret (e.g. X without `X_BEARER_TOKEN`) — not an error |
 
-Below it: the top 10 games it would score right now, what it *would* have posted (nothing is
-posted unless you ticked `post_test`), and the run time. A smoke run never changes the bot's state.
+Below it: the **Your feeds** table (one row per feed in `config/feeds.yaml`: ok with its item
+count, warning, error, paused, skipped, or *fix feeds.yaml*), the top 10 games it would score
+right now, what it *would* have posted (nothing is posted unless you ticked `post_test`), and the
+run time. A smoke run never changes the bot's state.
 
 ### Common problems
 
