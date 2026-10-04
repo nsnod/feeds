@@ -109,6 +109,17 @@ class Collector(ABC):
         return None
 
     # ---- helpers -----------------------------------------------------
+    def scratch(self) -> dict:
+        """Mutable per-collector scratch dict persisted in state (``meta.collector_state[name]``).
+
+        Use it for small things like pagination cursors. Without state it is a throwaway dict.
+        """
+        if self.ctx.state is None:
+            if not hasattr(self, "_scratch"):
+                self._scratch: dict = {}
+            return self._scratch
+        return self.ctx.state.meta.collector_state.setdefault(self.name, {})
+
     @contextmanager
     def guard(self, label: str) -> Iterator[None]:
         """Isolate one unit of work: record its error and carry on with the next unit."""

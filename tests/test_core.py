@@ -372,3 +372,21 @@ def test_safe_fetch_helpers_never_raise():
     assert c.safe_fetch_audience(m) is None
     assert len(c.report.warnings) == 2
     assert Collector.fetch_comments(c, m, 1) == [] and Collector.fetch_audience(c, m) is None
+
+
+def test_scratch_is_persisted_in_state_or_throwaway():
+    from gembot.models import State
+
+    class S(Collector):
+        name = "steam"
+
+        def collect(self):
+            self.scratch()["cursor"] = 7
+            return []
+
+    state = State()
+    S(CollectContext(config=make_config(), http=make_http(), now=NOW, state=state)).run()
+    assert state.meta.collector_state["steam"] == {"cursor": 7}
+    c = S(_ctx())
+    c.run()
+    assert c.scratch() == {"cursor": 7}

@@ -450,7 +450,8 @@ class Meta(_Model):
     discord: DiscordMeta = Field(default_factory=DiscordMeta)
     http_cache: dict[str, HttpCacheEntry] = Field(default_factory=dict)
     game_aliases: dict[str, str] = Field(default_factory=dict)  # merged game_id -> surviving game_id
-    reddit_baseline_ready: bool = False
+    # Small per-collector scratch space (e.g. Steam search page cursors). Collectors may write here.
+    collector_state: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     _utc = field_validator("last_run_at", "last_roundup_at", mode="before")(_utc_validator)
 

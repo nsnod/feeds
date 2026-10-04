@@ -64,7 +64,8 @@ Mention conventions:
 * `links` = every outbound URL in the post (link post URL, URLs in text, link facets,
   embeds). The resolver canonicalises them.
 * Steam mentions carry `extra["steam"] = SteamInfo.model_dump(mode="json")`.
-* Collectors only *read* `ctx.state` (e.g. to skip appdetails for known apps).
+* Collectors only *read* `ctx.state` (e.g. to skip appdetails for known apps). The one
+  exception is `self.scratch()`, a small persisted dict per collector (pagination cursors etc.).
 
 ### enrich/entity.py
 
