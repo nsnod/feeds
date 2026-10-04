@@ -869,6 +869,9 @@ def test_parse_post_edge_cases():
     assert variant(record__createdAt="2026-10-03T08:00:00").created_at == NOW - timedelta(hours=4)
     assert variant(record__createdAt=None) is not None
     assert variant(record__createdAt=None, indexedAt=None) is None
+    # createdAt is author-controlled: out-of-range offsets overflow in UTC and fall back to indexedAt
+    for hostile in ("9999-12-31T23:59:59-12:00", "0001-01-01T00:00:00+01:00"):
+        assert variant(record__createdAt=hostile).created_at == datetime.fromisoformat(base["indexedAt"])
     # negated labels do not count; other blocked labels do
     neg = [{"val": "porn", "neg": True}]
     assert variant(labels=neg) is not None
@@ -884,6 +887,9 @@ def test_parse_post_edge_cases():
     text = "see https://example.com/very/lo... and (https://ok.example/path)."
     m = variant(record__text=text, record__facets=[], record__embed=None, embed=None)
     assert m.links == ["https://ok.example/path"]
+    text = "(https://a.example/lo...) https://b.example/x..., https://c.example/y…! https://d.example/z"
+    m = variant(record__text=text, record__facets=[], record__embed=None, embed=None)
+    assert m.links == ["https://d.example/z"]
     # long first line -> cut at a word boundary
     m = variant(record__text="word " * 40)
     assert len(m.title) <= 120 and not m.title.endswith(" ")
@@ -1054,3 +1060,12 @@ def test_fetch_audiences_never_raises(mock):
     assert route.call_count == 4
     assert any("HTTP 500" in w for w in collector.report.warnings)
     assert any("budget" in w for w in collector.report.warnings)
+
+
+def test_disabled_bluesky_makes_no_enrichment_requests(mock):
+    collector = make_collector(enabled=False)
+    mention = _gp_mention()
+    assert collector.fetch_comments(mention, 10) == []
+    assert collector.fetch_audience(mention) is None
+    assert collector.fetch_audiences([mention]) == 0
+    assert len(mock.calls) == 0 and collector.budget.used == 0
