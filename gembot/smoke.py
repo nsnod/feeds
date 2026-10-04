@@ -111,7 +111,7 @@ def post_test_alarm(config: Config, state: State, *, now: datetime, http) -> str
     channels = state.meta.discord.channels
     if "alarm" not in channels:
         return "TEST alarm skipped: no channel ids yet - run the 'Setup GemBot' workflow first."
-    publisher = Publisher(api, channels, config.settings)
+    publisher = Publisher(api, channels, config.settings, sleep=http.sleep)
     message = publisher.post_alarm(make_test_card(now), _zero_features(), now)
     return f"posted a TEST alarm (message {message.message_id}) to #{config.settings.discord.alarm_channel}."
 
@@ -130,13 +130,14 @@ def run_smoke(
     state_dir: Path | None = None,
     summary_path: Path | None = None,
     transport=None,
+    sleep=time.sleep,
 ) -> int:
     from gembot.runner import make_http
 
     state = _load_state_copy(state_dir)
     started = time.monotonic()
-    with make_http(config, state, now=now, transport=transport) as http:
-        pipeline = Pipeline(config, state, http=http, now=now, discord=None, post=False)
+    with make_http(config, state, now=now, transport=transport, sleep=sleep) as http:
+        pipeline = Pipeline(config, state, http=http, now=now, discord=None, post=False, sleep=sleep)
         result = pipeline.run()
         posted = None
         if post_test:
