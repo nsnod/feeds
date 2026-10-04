@@ -1,0 +1,90 @@
+{
+  "3611110": {
+    "success": true,
+    "data": {
+      "type": "game",
+      "name": "Couch Cartographers",
+      "steam_appid": 3611110,
+      "required_age": 0,
+      "is_free": false,
+      "detailed_description": "<h2 class=\"bb_tag\">About</h2><p>Map an ever-shifting island with up to four friends on one couch or online.</p>",
+      "about_the_game": "<p>Map an ever-shifting island with up to four friends on one couch or online.</p>",
+      "short_description": "Map an ever-shifting island with up to four friends on one couch or online.",
+      "supported_languages": "English<strong>*</strong><br><strong>*</strong>languages with full audio support",
+      "header_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/3611110/header.jpg?t=1759000000",
+      "capsule_image": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/3611110/capsule_231x87.jpg?t=1759000000",
+      "capsule_imagev5": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/3611110/capsule_184x69.jpg?t=1759000000",
+      "website": null,
+      "pc_requirements": {
+        "minimum": "<strong>Minimum:</strong><br><ul class=\"bb_ul\"><li>OS: Windows 10</li></ul>"
+      },
+      "mac_requirements": [],
+      "linux_requirements": [],
+      "developers": [
+        "Two Lamps Games"
+      ],
+      "publishers": [
+        "Two Lamps Games"
+      ],
+      "platforms": {
+        "windows": true,
+        "mac": false,
+        "linux": false
+      },
+      "categories": [
+        {
+          "id": 1,
+          "description": "Multi-player"
+        },
+        {
+          "id": 9,
+          "description": "Co-op"
+        },
+        {
+          "id": 39,
+          "description": "Shared/Split Screen Co-op"
+        },
+        {
+          "id": 24,
+          "description": "Shared/Split Screen"
+        }
+      ],
+      "genres": [
+        {
+          "id": "4",
+          "description": "Casual"
+        },
+        {
+          "id": "23",
+          "description": "Indie"
+        },
+        {
+          "id": "70",
+          "description": "Early Access"
+        }
+      ],
+      "release_date": {
+        "coming_soon": false,
+        "date": "Sep 30, 2026"
+      },
+      "support_info": {
+        "url": "",
+        "email": "support@example.com"
+      },
+      "background": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/3611110/page_bg_generated_v6b.jpg?t=1759000000",
+      "content_descriptors": {
+        "ids": [],
+        "notes": null
+      },
+      "ratings": null,
+      "price_overview": {
+        "currency": "USD",
+        "initial": 1999,
+        "final": 1499,
+        "discount_percent": 25,
+        "initial_formatted": "$19.99",
+        "final_formatted": "$14.99"
+      }
+    }
+  }
+}

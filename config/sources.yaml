@@ -25,8 +25,15 @@ steam:
   coop_category_ids: [9, 38, 39, 48]        # Co-op, Online Co-op, Shared/Split Screen Co-op, LAN Co-op
   multiplayer_category_ids: [1, 27, 36, 49] # Multi-player, Cross-Platform Multiplayer, Online PvP, PvP
   early_access_genre_id: 70
-  max_new_apps_per_run: 25
-  track_followers: false         # community hub follower counts (see VERIFICATION.md)
+  max_new_apps_per_run: 25       # appdetails calls per run (new apps first, then stale ones)
+  appdetails_refresh_hours: 24   # stored appdetails younger than this are reused
+  page_size: 50                  # search rows per request ("count")
+  exclude_tags: [128]            # "untags": Massively Multiplayer
+  request_interval_s: 2.0        # store.steampowered.com allows ~200 requests / 5 min per IP;
+                                 # the first 429/403 stops Steam for the run (blocks last ~5 min)
+  # "comingsoon" searches crawl a rotating window of max_pages pages per run (cursor kept in
+  # state); "popular*" searches always read page 1 and record each game's rank.
+  track_followers: false         # no keyless follower API exists (see VERIFICATION.md)
 
 reddit:
   enabled: true
