@@ -244,7 +244,7 @@ class Pipeline:
         for key in result.dropped:
             # unresolvable mentions never become games; forget the body, keep "seen"
             state.mentions.pop(key, None)
-        for key, game_id in result.assignments.items():
+        for game_id in result.assignments.values():
             games.add(state.meta.game_aliases.get(game_id, game_id))
         return {g for g in games if g in state.games}
 
