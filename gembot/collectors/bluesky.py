@@ -17,7 +17,10 @@ issues; see docs/VERIFICATION.md):
   kills the stored session. New logins are capped per 24 hours (``max_sessions_per_day``).
 * ``createSession`` answers the same ``401`` for a wrong handle and a wrong password. After
   one, GemBot asks the public AppView (``resolveHandle``, no token) whether the handle exists,
-  once per set of credentials, so the error can say which secret to fix.
+  once per set of credentials (again with the daily login retry only if the check itself
+  failed), so the error can say which secret to fix. A handle that may hold a password (an
+  App Password pasted into it, or the two secrets swapped) is never looked up: the lookup is a
+  GET, so the value would end up in a URL.
 * Without credentials we try public search at most once every ``unauth_probe_hours``
   and otherwise skip quietly (a skip is not a failure).
 * Replies (``getPostThread``) and follower counts (``getProfile(s)``) work logged out on
@@ -90,16 +93,22 @@ PUBLIC_BLOCKED_REASON = (
 )
 LOGIN_LIMIT_WARNING = "Bluesky login limit reached; will retry later"
 
-# What resolveHandle said about BLUESKY_HANDLE after a rejected login (stored in scratch).
-HANDLE_FOUND = "found"  # the account exists: the App Password is wrong
-HANDLE_MISSING = "missing"  # no such handle on Bluesky
+# What the handle check said about BLUESKY_HANDLE after a rejected login (stored in scratch).
+HANDLE_FOUND = "found"  # the account exists: probably the App Password is wrong
+HANDLE_MISSING = "missing"  # no such handle on Bluesky (or not even handle syntax)
 HANDLE_UNKNOWN = "unknown"  # the check itself failed (5xx, network, odd answer)
 HANDLE_SKIPPED = "skipped"  # an email address or a DID: nothing to look up
+HANDLE_MIXED_UP = "mixed_up"  # BLUESKY_HANDLE seems to hold a password: never looked up
 
 APP_PASSWORDS = "Settings -> Privacy and security -> App passwords"
 APP_PASSWORD_SHAPE = "xxxx-xxxx-xxxx-xxxx"
+ADDED_BSKY_SOCIAL = "added .bsky.social"  # the _clean_handle fix that guesses the domain
 _APP_PASSWORD_RE = re.compile(r"[a-z0-9]{4}(?:-[a-z0-9]{4}){3}")
 _PROFILE_LINK_RE = re.compile(r"(?:https?://)?(?:www\.)?bsky\.app/profile/([^/?#]+)", re.IGNORECASE)
+# atproto handle syntax: dot-separated labels, the last one starting with a letter
+_HANDLE_RE = re.compile(
+    r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?", re.IGNORECASE
+)
 _DID_PREFIXES = ("did:plc:", "did:web:")
 _REJECTED_PREFIX = "BLUESKY_APP_PASSWORD rejected"  # also marks entries stored before handle checks
 
@@ -227,12 +236,17 @@ def _is_did(identifier: str) -> bool:
     return identifier.lower().startswith(_DID_PREFIXES)
 
 
+def _is_handle(identifier: str) -> bool:
+    return len(identifier) <= 253 and bool(_HANDLE_RE.fullmatch(identifier))
+
+
 def _clean_handle(raw: str) -> tuple[str, list[str]]:
     """``BLUESKY_HANDLE`` the way Bluesky wants it, plus what was fixed (never the value itself).
 
     Fixes the usual paste mistakes: spaces, a profile link (``https://bsky.app/profile/<handle>``),
-    a leading ``@``, a trailing ``/``, capitals, and a bare username (``name`` becomes
-    ``name.bsky.social``). An email address is only trimmed; a DID is kept as it is.
+    leading ``@``s, a trailing ``/`` or ``.``, capitals, and a bare username (``name`` becomes
+    ``name.bsky.social``). An email address is only trimmed (and loses leading ``@``s, as it
+    always did); a DID is kept as it is.
     """
     value = raw.strip()
     fixes = ["removed spaces"] if value != raw else []
@@ -240,23 +254,42 @@ def _clean_handle(raw: str) -> tuple[str, list[str]]:
     if link:
         value = link.group(1)
         fixes.append("took the handle from a profile link")
-    if _is_email(value):
-        return value, fixes
-    if value.startswith("@"):
+    if value.startswith("@"):  # before the email test: "@me@example.com" is an email after this
         value = value.lstrip("@")
         fixes.append("removed a leading @")
+    if _is_email(value):
+        return value, fixes
     if value.endswith("/"):
         value = value.rstrip("/")
         fixes.append("removed a trailing /")
-    if not value or _is_did(value):
+    if _is_did(value):
+        return value, fixes
+    if value.endswith("."):  # e.g. copied from the end of a sentence; a handle never ends in a dot
+        value = value.rstrip(".")
+        fixes.append("removed a trailing dot")
+    if not value:
         return value, fixes
     if value != value.lower():
         value = value.lower()
         fixes.append("made it lowercase")
     if "." not in value:
         value += ".bsky.social"
-        fixes.append("added .bsky.social")
+        fixes.append(ADDED_BSKY_SOCIAL)
     return value, fixes
+
+
+def _may_hold_password(identifier: str, fixes: list[str], password: str) -> bool:
+    """BLUESKY_HANDLE (cleaned up into ``identifier`` by ``fixes``) seems to hold a password: an
+    App Password pasted into it (alone or after the handle), the value of BLUESKY_APP_PASSWORD,
+    or the two secrets swapped (BLUESKY_HANDLE is no full handle, BLUESKY_APP_PASSWORD is one).
+    Such a value must never go into a lookup URL."""
+    password = password.lower()
+    if _APP_PASSWORD_RE.search(identifier) or (password and password in identifier.lower()):
+        return True
+    if ADDED_BSKY_SOCIAL not in fixes and _is_handle(identifier):
+        return False  # a full handle; a password with dots is just a wrong password
+    handle, password_fixes = _clean_handle(password)  # pure: nothing is logged
+    return ADDED_BSKY_SOCIAL not in password_fixes and _is_handle(handle)
 
 
 def _normalize_handle(handle: str) -> str:
@@ -561,9 +594,10 @@ class BlueskyCollector(Collector):
     Scratch (``meta.collector_state["bluesky"]``, may be public):
     ``session`` (Fernet token, see :class:`SessionBox`), ``created`` (createSession attempts in
     the last 24h), ``login_error`` (last failed login: time, message, credential fingerprint;
-    after a 401 also ``rejected`` and ``handle_check``, the ``HANDLE_*`` answer of the one
-    resolveHandle lookup), ``route`` (``pds`` or ``appview``: the search route that worked
-    last), ``public_ok`` / ``public_probe_at`` (logged-out search probe).
+    after a 401 also ``rejected`` and ``handle_check``, the ``HANDLE_*`` answer of the handle
+    check, kept for as long as the fingerprint stays the same), ``route`` (``pds`` or
+    ``appview``: the search route that worked last), ``public_ok`` / ``public_probe_at``
+    (logged-out search probe).
     """
 
     name = "bluesky"
@@ -574,6 +608,7 @@ class BlueskyCollector(Collector):
         self._session: BlueskySession | None = None
         self._box: SessionBox | None = None
         self._handle: str | None = None
+        self._handle_fixes: list[str] = []
         self._seen_uris: set[str] = set()
 
     # ---- hooks -------------------------------------------------------
@@ -771,8 +806,8 @@ class BlueskyCollector(Collector):
             and now - last_at < LOGIN_WINDOW
         ):
             # The same credentials were rejected recently: don't spend bsky.social's daily login limit.
-            if _was_rejected(last) and "handle_check" not in last:
-                self._explain_rejection(last)  # e.g. stored before handle checks existed
+            if _was_rejected(last):  # checks the handle if not done yet (e.g. stored before checks existed)
+                self._explain_rejection(last)
             raise LoginError(
                 f"{last.get('message')} (next try {_iso(last_at + LOGIN_WINDOW)} or when the secret changes)"
             )
@@ -789,6 +824,9 @@ class BlueskyCollector(Collector):
 
         def remember(message: str, *, fatal: bool) -> dict[str, Any]:
             entry = {"at": _iso(now), "message": message, "fp": box.fingerprint, "fatal": fatal}
+            if last.get("fp") == box.fingerprint and last.get("handle_check"):
+                # already checked for these credentials: keep it through a 503 or timeout in between
+                entry["handle_check"] = last["handle_check"]
             scratch["login_error"] = entry
             return entry
 
@@ -802,8 +840,8 @@ class BlueskyCollector(Collector):
             raise
         if reply.status != 200 and _rejected(reply):
             entry = remember("", fatal=True)  # the message comes from _explain_rejection
-            if last.get("fp") == box.fingerprint and last.get("handle_check"):
-                entry["handle_check"] = last["handle_check"]  # already looked up for these credentials
+            if entry.get("handle_check") == HANDLE_UNKNOWN:
+                del entry["handle_check"]  # the last check failed: try once more with this login
             self._explain_rejection(entry)
             raise LoginError(
                 f"{entry['message']}. GemBot tries again on its next run after the secret changes"
@@ -826,8 +864,9 @@ class BlueskyCollector(Collector):
         """Write the message for a 401 into ``entry`` (the ``login_error`` scratch): "wrong handle"
         or "wrong App Password" when the handle check can tell, the general advice otherwise.
 
-        The handle is looked up at most once per set of credentials: the answer is kept in
-        ``entry["handle_check"]`` next to the credential fingerprint.
+        The handle is checked at most once per set of credentials: the answer is kept in
+        ``entry["handle_check"]`` next to the credential fingerprint. Only a failed check
+        (``HANDLE_UNKNOWN``) is repeated, with the next login attempt (at most once a day).
         """
         check = entry.get("handle_check") or self._check_handle()
         if check is not None:  # None: no request budget left, look it up on a later run
@@ -840,6 +879,10 @@ class BlueskyCollector(Collector):
         identifier = self._identifier()
         if not identifier or _is_email(identifier) or _is_did(identifier):
             return HANDLE_SKIPPED
+        if _may_hold_password(identifier, self._handle_fixes, self.config.secrets.bluesky_app_password or ""):
+            return HANDLE_MIXED_UP  # never put a password into a URL
+        if not _is_handle(identifier):
+            return HANDLE_MISSING  # not even handle syntax: no account can have it
         try:
             reply = self._xrpc(
                 "GET",
@@ -866,14 +909,19 @@ class BlueskyCollector(Collector):
 
     def _rejected_message(self, check: str) -> str:
         password = self.config.secrets.bluesky_app_password or ""
-        return _rejected_message(check, looks_right=_looks_like_app_password(password))
+        self._identifier()  # sets _handle_fixes
+        return _rejected_message(
+            check,
+            looks_right=_looks_like_app_password(password),
+            guessed=ADDED_BSKY_SOCIAL in self._handle_fixes,
+        )
 
     def _identifier(self) -> str:
         """BLUESKY_HANDLE as sent to Bluesky, with common paste mistakes fixed (see :func:`_clean_handle`)."""
         if self._handle is None:
-            self._handle, fixes = _clean_handle(self.config.secrets.bluesky_handle or "")
-            if fixes:  # say what changed, never the handle itself
-                self.log.info("BLUESKY_HANDLE fixed for this run: %s", ", ".join(fixes))
+            self._handle, self._handle_fixes = _clean_handle(self.config.secrets.bluesky_handle or "")
+            if self._handle_fixes:  # say what changed, never the handle itself
+                self.log.info("BLUESKY_HANDLE fixed for this run: %s", ", ".join(self._handle_fixes))
         return self._handle
 
     def _renew(self) -> BlueskySession:
@@ -1063,15 +1111,30 @@ def _was_rejected(entry: dict[str, Any]) -> bool:
     return entry.get("rejected") is True or str(entry.get("message") or "").startswith(_REJECTED_PREFIX)
 
 
-def _rejected_message(check: str, *, looks_right: bool) -> str:
+def _rejected_message(check: str, *, looks_right: bool, guessed: bool = False) -> str:
     """What to fix after a 401, as exactly as the handle check allows. Never contains a secret
     value (nor the password's length or any part of it). ``looks_right``: the App Password has
-    the ``xxxx-xxxx-xxxx-xxxx`` shape."""
+    the ``xxxx-xxxx-xxxx-xxxx`` shape. ``guessed``: GemBot added ``.bsky.social`` to the handle.
+
+    An existing handle does not prove the App Password is wrong: the handle may be someone
+    else's (a display name turned into ``name.bsky.social``, a typo, another profile's link)."""
+    odd = "" if looks_right else f" (the current one doesn't look like an App Password, {APP_PASSWORD_SHAPE})"
+    if check == HANDLE_MIXED_UP:  # says what both secrets look like, so no extra hint
+        return (
+            "BLUESKY_HANDLE and BLUESKY_APP_PASSWORD look mixed up: BLUESKY_HANDLE is the full handle, "
+            f"like yourname.bsky.social; BLUESKY_APP_PASSWORD is an App Password, like {APP_PASSWORD_SHAPE} "
+            f"({APP_PASSWORDS})"
+        )
+    if check == HANDLE_FOUND and guessed:
+        return (
+            "GemBot added .bsky.social to BLUESKY_HANDLE; that account exists. If it isn't the bot's, set "
+            f"the full handle; if it is, make a new App Password ({APP_PASSWORDS}){odd}"
+        )
     if check == HANDLE_FOUND:
         odd = "" if looks_right else f" (it doesn't look like an App Password, {APP_PASSWORD_SHAPE})"
         return (
-            f"BLUESKY_HANDLE exists on Bluesky, so BLUESKY_APP_PASSWORD is wrong{odd}: make a new App "
-            f"Password for that account ({APP_PASSWORDS}) and update the secret"
+            f"BLUESKY_HANDLE exists, so BLUESKY_APP_PASSWORD is probably wrong{odd}: make a new App Password "
+            f"({APP_PASSWORDS}), or if that account isn't the bot's, fix BLUESKY_HANDLE"
         )
     if check == HANDLE_MISSING:
         odd = (
@@ -1084,7 +1147,6 @@ def _rejected_message(check: str, *, looks_right: bool) -> str:
             "BLUESKY_HANDLE is not a Bluesky account: use the full handle, like yourname.bsky.social "
             f"(no @, no link, not the display name){odd}"
         )
-    odd = "" if looks_right else f" (the current one doesn't look like an App Password, {APP_PASSWORD_SHAPE})"
     return (
         f"{_REJECTED_PREFIX} — create a new App Password (Bluesky {APP_PASSWORDS}), update the secret, "
         f"and check BLUESKY_HANDLE{odd}"
