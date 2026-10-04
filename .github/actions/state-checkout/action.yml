@@ -1,0 +1,22 @@
+name: Check out GemBot state
+description: >
+  Creates the orphan bot-state branch if it is missing, then checks it out into ./state
+  as a git worktree on a local "bot-state" branch, so gembot can commit and push to it.
+inputs:
+  branch:
+    description: state branch name
+    default: bot-state
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        BRANCH: ${{ inputs.branch }}
+      run: |
+        set -euo pipefail
+        git config --global user.name "gembot"
+        git config --global user.email "gembot@users.noreply.github.com"
+        python -m gembot init-state --repo-dir .
+        git fetch --no-tags --depth=50 origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
+        git worktree add -B "${BRANCH}" state "origin/${BRANCH}"
+        echo "state files:" && ls -la state
