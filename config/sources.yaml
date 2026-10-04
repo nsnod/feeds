@@ -47,17 +47,49 @@ reddit:
   comments_limit: 100
   max_post_age_hours: 72
 
+# itch.io browse pages + ".xml" = RSS 2.0, 36 items per page, item order = listing rank.
+# Tag slugs are itch's canonical ones ("co-op", never "coop"; unverified live, see
+# docs/VERIFICATION.md). Combined sort+tag URLs (new-and-popular/tag-X) may get a
+# Cloudflare challenge on GitHub runners. Then, once per run, the feed's fallback is read:
+#   * default below: the sort-only newest feed (single facet; reported to pass while
+#     sort+tag pages looped), keeping only games whose name / description / genre / URL
+#     slug match one of fallback_keywords. No rank: newest is not a popularity order.
+#     It reuses the page the "newest" feed already fetched, so it costs no extra request.
+#   * alternative: fallback_url: "https://itch.io/games/tag-<slug>.xml" with
+#     fallback_ranked: true and no keywords. That is the all-time "Top" order of the tag:
+#     a rank-within-tag signal, but new games almost never appear in it.
+#   * no fallback_url: the feed is just recorded as blocked for this run.
+# After one challenge the other feeds go straight to their fallbacks (for
+# fallback_hold_hours), and after max_challenges blocks the remaining itch feeds are skipped.
 itch:
   enabled: true
   popular_feed: new-and-popular
+  request_interval_s: 1.0     # pause between itch requests (be polite)
+  max_challenges: 2           # Cloudflare challenges / 403s per run before giving up on itch
+  fallback_hold_hours: 6      # after a challenge, use fallbacks directly for this long
   feeds:
     - {name: new-and-popular, url: "https://itch.io/games/new-and-popular.xml"}
-    - {name: newest, url: "https://itch.io/games/newest.xml", ranked: false}
-    - {name: tag-multiplayer, url: "https://itch.io/games/new-and-popular/tag-multiplayer.xml"}
-    - {name: tag-co-op, url: "https://itch.io/games/new-and-popular/tag-co-op.xml"}
-    - {name: tag-local-multiplayer, url: "https://itch.io/games/new-and-popular/tag-local-multiplayer.xml"}
-    - {name: tag-horror, url: "https://itch.io/games/new-and-popular/tag-horror.xml"}
-    - {name: tag-physics, url: "https://itch.io/games/new-and-popular/tag-physics.xml"}
+    - {name: newest, url: "https://itch.io/games/newest.xml", ranked: false, max_pages: 2}
+    - name: tag-multiplayer
+      url: "https://itch.io/games/new-and-popular/tag-multiplayer.xml"
+      fallback_url: "https://itch.io/games/newest.xml"
+      fallback_keywords: [multiplayer, multi-player, "online co-op", pvp, "2-4 players", "1-4 players", "up to 4 players", "proximity chat"]
+    - name: tag-co-op
+      url: "https://itch.io/games/new-and-popular/tag-co-op.xml"
+      fallback_url: "https://itch.io/games/newest.xml"
+      fallback_keywords: [co-op, coop, cooperative, co-operative, "with friends", "with your friends"]
+    - name: tag-local-multiplayer
+      url: "https://itch.io/games/new-and-popular/tag-local-multiplayer.xml"
+      fallback_url: "https://itch.io/games/newest.xml"
+      fallback_keywords: ["local multiplayer", "local co-op", "couch co-op", split-screen, "split screen", "same screen", "shared screen"]
+    - name: tag-horror
+      url: "https://itch.io/games/new-and-popular/tag-horror.xml"
+      fallback_url: "https://itch.io/games/newest.xml"
+      fallback_keywords: [horror, scary, creepy, haunted, terrifying]
+    - name: tag-physics
+      url: "https://itch.io/games/new-and-popular/tag-physics.xml"
+      fallback_url: "https://itch.io/games/newest.xml"
+      fallback_keywords: [physics, physics-based, ragdoll, wobbly]
 
 bluesky:
   enabled: true
