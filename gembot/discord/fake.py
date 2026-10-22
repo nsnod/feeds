@@ -101,6 +101,23 @@ class FakeDiscord:
         else:
             store.pop(emoji, None)
 
+    def post_as_user(self, channel_id: str, user_id: str, content: str, *, bot: bool = False) -> str:
+        """A person (or another bot) writes in a channel; returns the message id."""
+        self._channel(channel_id)
+        message_id = self.new_id()
+        author: dict[str, Any] = {"id": str(user_id), "username": f"user{user_id}"}
+        if bot:
+            author["bot"] = True
+        self.messages[message_id] = {
+            "id": message_id,
+            "channel_id": channel_id,
+            "payload": {"content": content},
+            "author": author,
+            "reactions": {},
+            "burst": {},
+        }
+        return message_id
+
     def messages_in(self, channel_id: str) -> list[dict]:
         return [m for m in self.messages.values() if m["channel_id"] == channel_id]
 
@@ -201,6 +218,24 @@ class FakeDiscord:
         if reactions:  # Discord omits the key when a message has no reactions
             data["reactions"] = reactions
         return data
+
+    def get_messages(self, channel_id: str, after: str | None = None, limit: int = 50) -> list[dict]:
+        """Newest first, like Discord. The bot's own posts carry the bot as author."""
+        self._call("get_messages", channel_id)
+        self._channel(channel_id)
+        bot = {"id": str(self.bot_user["id"]), "username": self.bot_user.get("username"), "bot": True}
+        found = [
+            {
+                "id": m["id"],
+                "channel_id": channel_id,
+                "author": dict(m.get("author") or bot),
+                "content": str(m["payload"].get("content") or ""),
+            }
+            for m in self.messages.values()
+            if m["channel_id"] == channel_id and (after is None or int(m["id"]) > int(after))
+        ]
+        found.sort(key=lambda m: int(m["id"]))
+        return list(reversed(found[: max(1, min(limit, 100))]))
 
     def get_reaction_users(
         self,

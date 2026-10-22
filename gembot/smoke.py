@@ -219,6 +219,11 @@ def run_smoke(
         titles={game_id: game.title for game_id, game in state.games.items() if game.title},
         thresholds=(decisions.roundup_score, decisions.alarm_score),
     )
+    if state.meta.paused:  # the smoke test always runs; real scans don't while paused
+        text += (
+            "\n**GemBot is paused** (someone said `@GemBot pause` in #gembot-status): scheduled scans "
+            "check nothing and post nothing until someone says `@GemBot resume` there.\n"
+        )
     print(text)
     if summary_path is not None:
         try:

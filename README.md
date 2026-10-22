@@ -28,7 +28,7 @@ It runs **entirely on GitHub Actions** (free for public repositories). No server
 ## Contents
 
 1. [Set it up (about 15 minutes)](#set-it-up-about-15-minutes)
-2. [Make your phones ping](#make-your-phones-ping)
+2. [Make your phones ping](#make-your-phones-ping) · [Pause GemBot](#pause-gembot)
 3. [Optional extras (Bluesky, Reddit, X, Claude, role ping)](#optional-extras)
 4. [Add Instagram, TikTok and YouTube feeds](#add-instagram-tiktok-and-youtube-feeds)
 5. [Tune it (`settings.yaml`)](#tune-it)
@@ -131,6 +131,24 @@ Do this on **both** of your phones so a 🚨 alarm reaches you instantly:
 Tip: leave `#gem-roundup` on "Only @mentions" so only the alarms buzz. If Discord desktop is open
 and active, mobile pushes can be delayed — that's a Discord setting (Desktop → Notifications →
 Push Notification Inactive Timeout).
+
+### Pause GemBot
+
+Not using it for a while? In **`#gembot-status`**, type `@` and pick GemBot, then **pause**:
+
+| Say | What happens |
+|---|---|
+| `@GemBot pause` | GemBot stops: it checks no sources and posts nothing (no pings). |
+| `@GemBot resume` | It scans again straight away, then about every 30 minutes. |
+| `@GemBot status` | It says whether it's paused or running. |
+
+GemBot isn't online between scans, so it answers at its next check: within about 30 minutes,
+with a short note in `#gembot-status`. While paused it only reads that channel for `resume`,
+and what it learned (scores, your 👍/👎) is kept. Plain `pause` / `resume` / `status` without
+the `@` work too once **Message Content Intent** is on (Discord Developer Portal → your app →
+**Bot**); GemBot tells you if it sees messages it can't read. Anyone who can write in
+`#gembot-status` can pause it. To stop it from GitHub instead: **Actions → GemBot scan → "…" →
+Disable workflow** (and **Enable workflow** to start again).
 
 ---
 

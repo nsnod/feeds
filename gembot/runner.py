@@ -114,6 +114,9 @@ def run_scan(
 
 
 def _log_summary(result: RunResult) -> None:
+    if result.paused:
+        log.info("run summary: paused from Discord, nothing scanned (say '@GemBot resume' in #gembot-status)")
+        return
     plan = result.plan
     log.info(
         "run summary: %d mentions (%d new), %d games scored, %d alarm(s), %d roundup entr%s, %d message(s) posted",

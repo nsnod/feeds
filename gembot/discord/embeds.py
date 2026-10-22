@@ -332,7 +332,10 @@ def welcome_payload(channel_ids: dict[str, str] | None = None, *, up: str = "ðŸ‘
         "description": description,
         "color": WELCOME_COLOR,
         "fields": fields,
-        "footer": {"text": "I also posted a TEST alarm so you can see what a real one looks like."},
+        "footer": {
+            "text": "I also posted a TEST alarm so you can see what a real one looks like. "
+            "To pause me, say @GemBot pause in #gembot-status (and @GemBot resume to start again)."
+        },
     }
     return enforce_limits({"embeds": [embed]})
 

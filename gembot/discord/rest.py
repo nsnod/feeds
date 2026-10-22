@@ -132,6 +132,10 @@ class DiscordAPI(Protocol):
 
     def get_message(self, channel_id: str, message_id: str) -> dict: ...
 
+    def get_messages(self, channel_id: str, after: str | None = None, limit: int = 50) -> list[dict]:
+        """Up to ``limit`` messages posted after the id ``after`` (any order; callers sort)."""
+        ...
+
     def get_reaction_users(
         self,
         channel_id: str,
@@ -349,6 +353,13 @@ class DiscordClient:
 
     def get_message(self, channel_id: str, message_id: str) -> dict:
         return self._json("GET", f"/channels/{channel_id}/messages/{message_id}")
+
+    def get_messages(self, channel_id: str, after: str | None = None, limit: int = 50) -> list[dict]:
+        params: dict[str, Any] = {"limit": max(1, min(int(limit), 100))}
+        if after:
+            params["after"] = after
+        messages = self._json("GET", f"/channels/{channel_id}/messages", params=params)
+        return messages if isinstance(messages, list) else []
 
     def get_reaction_users(
         self,

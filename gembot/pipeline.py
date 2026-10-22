@@ -20,6 +20,7 @@ from pathlib import Path
 from gembot.collectors import build_collectors
 from gembot.collectors.base import CollectContext, Collector, SourceReport
 from gembot.config import Config
+from gembot.discord.commands import Command, read_inbox
 from gembot.discord.feedback import apply_feedback, collect_reactions, mark_weekly_note, maybe_weekly_note
 from gembot.discord.publish import Publisher, build_card
 from gembot.discord.rest import DiscordAPI
@@ -76,6 +77,7 @@ class RunResult:
     weekly_note: str | None = None
     warnings: list[str] = field(default_factory=list)
     state_push_failed: bool = False  # set by run_scan
+    paused: bool = False  # paused from Discord: nothing was scanned
 
     def top(self, n: int = 10) -> list[ScoreResult]:
         ranked = [r for r in self.results.values() if not r.excluded]
@@ -126,6 +128,10 @@ class Pipeline:
 
     # ------------------------------------------------------------------ run
     def run(self) -> RunResult:
+        if self.handle_commands():  # paused from Discord: no sources, no posts this scan
+            self.result.paused = True
+            self.state.meta.last_run_at = self.now
+            return self.result
         started = time.monotonic()
         self.collect_deadline = started + self.settings.run.collect_seconds
         self.network_deadline = started + self.settings.run.network_seconds
@@ -155,6 +161,86 @@ class Pipeline:
         meta.last_run_at = self.now
         meta.run_count += 1
         return self.result
+
+    # ------------------------------------------------------------------ 0 commands
+    def handle_commands(self) -> bool:
+        """Read pause / resume / status from #gembot-status; True when GemBot is paused.
+
+        Only real scans (``post``) obey a pause: smoke tests and dry runs are started by hand.
+        If Discord can't be read, the stored pause stands (no pings by accident).
+        """
+        meta = self.state.meta
+        if not self.post:
+            return False
+        channel = meta.discord.channels.get("status")
+        if self.discord is None or not channel:
+            return meta.paused
+        try:
+            inbox = read_inbox(
+                self.discord,
+                channel,
+                bot_user_id=meta.discord.bot_user_id,
+                after=meta.discord.commands_after,
+                now=self.now,
+            )
+        except Exception as exc:  # never lose the scan over the inbox
+            self.result.warnings.append(f"could not read commands in #gembot-status: {exc}")
+            return meta.paused
+        notes = [self._apply_command(command) for command in inbox.commands]
+        hint_due = (
+            meta.discord.content_hint_at is None
+            or self.now - meta.discord.content_hint_at > timedelta(days=30)
+        )
+        if inbox.unreadable and not inbox.commands and hint_due:
+            notes.append(self._content_hint())
+            meta.discord.content_hint_at = self.now
+        meta.discord.commands_after = inbox.newest_id
+        publisher = self._publisher()
+        if notes and publisher is not None:
+            try:
+                message = publisher.post_status(notes, self.now)
+                if message is not None:
+                    self._remember(message)
+            except Exception as exc:
+                self.result.warnings.append(f"could not answer in #gembot-status: {exc}")
+        if meta.paused:
+            log.info("paused from Discord (since %s): nothing scanned", meta.paused_at)
+        return meta.paused
+
+    def _apply_command(self, command: Command) -> str:
+        meta = self.state.meta
+        who = f"<@{command.user_id}>"
+        me = self._me()
+        if command.action == "pause":
+            if meta.paused:
+                return f"⏸️ Already paused (since {_when(meta.paused_at)})."
+            meta.paused, meta.paused_at, meta.paused_by = True, self.now, command.user_id
+            return (
+                f"⏸️ Paused by {who}. I won't check anything or post until someone says {me} resume "
+                "here (I look about every 30 minutes)."
+            )
+        if command.action == "resume":
+            if not meta.paused:
+                return "▶️ I'm already running."
+            meta.paused, meta.paused_at, meta.paused_by = False, None, None
+            return f"▶️ Resumed by {who}. Scanning again now, then about every 30 minutes."
+        if meta.paused:
+            by = f" by <@{meta.paused_by}>" if meta.paused_by else ""
+            return f"⏸️ Paused since {_when(meta.paused_at)}{by}. Say {me} resume to start again."
+        last = f" Last scan {_when(meta.last_run_at)}." if meta.last_run_at else ""
+        return f"▶️ Running: I scan about every 30 minutes.{last} Say {me} pause to pause me."
+
+    def _content_hint(self) -> str:
+        me = self._me()
+        return (
+            f"I can't read plain messages here yet. To pause or resume me, mention me: {me} pause / "
+            f"{me} resume. To use plain `pause` / `resume`, turn on **Message Content Intent** "
+            "(discord.com/developers/applications → your bot → Bot)."
+        )
+
+    def _me(self) -> str:
+        bot = self.state.meta.discord.bot_user_id
+        return f"<@{bot}>" if bot else "@GemBot"
 
     # ------------------------------------------------------------------ 1 collect
     def collect(self) -> list[Mention]:
@@ -609,6 +695,11 @@ class Pipeline:
 
 
 # ---------------------------------------------------------------------- helpers
+
+
+def _when(moment: datetime | None) -> str:
+    """A Discord timestamp that shows as "3 hours ago" in each reader's own time zone."""
+    return f"<t:{int(moment.timestamp())}:R>" if moment else "a while ago"
 
 
 def _earliest(a: datetime | None, b: datetime | None) -> datetime | None:

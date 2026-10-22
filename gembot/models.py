@@ -474,6 +474,10 @@ class DiscordMeta(_Model):
     channels: dict[str, str] = Field(default_factory=dict)  # role ("alarm"/"roundup"/"status") -> id
     bot_user_id: str | None = None
     welcome_message_id: str | None = None
+    commands_after: str | None = None  # newest #gembot-status message already read for commands
+    content_hint_at: datetime | None = None  # when we last explained "Message Content Intent"
+
+    _utc = field_validator("content_hint_at", mode="before")(_utc_validator)
 
 
 class HttpCacheEntry(_Model):
@@ -495,12 +499,16 @@ class Meta(_Model):
     http_cache: dict[str, HttpCacheEntry] = Field(default_factory=dict)
     game_aliases: dict[str, str] = Field(default_factory=dict)  # merged game_id -> surviving game_id
     keepalive_reminded_at: datetime | None = None
+    # Paused from Discord ("@GemBot pause"): scans then only look for "resume".
+    paused: bool = False
+    paused_at: datetime | None = None
+    paused_by: str | None = None  # Discord user id
     # Small per-collector scratch space (e.g. Steam search page cursors). Collectors may write here.
     collector_state: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
-    _utc = field_validator("last_run_at", "last_roundup_at", "keepalive_reminded_at", mode="before")(
-        _utc_validator
-    )
+    _utc = field_validator(
+        "last_run_at", "last_roundup_at", "keepalive_reminded_at", "paused_at", mode="before"
+    )(_utc_validator)
 
     def alarms_on(self, day: date) -> int:
         return self.daily_alarms.get(day.isoformat(), 0)
