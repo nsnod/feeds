@@ -372,6 +372,7 @@
 "1562881894813802530":{"channel_id":"1556204275078791300","entries":[{"applied_label":0.0,"features":{"cross":0.0,"fit":0.96,"fresh":1.0,"hype":0.0,"meme":0.0,"underdog":0.20281146615141657,"velocity":1.0},"game_id":"t:blighten-6e7918","score":54.9}],"kind":"roundup","last_down":0,"last_up":0,"message_id":"1562881894813802530","posted_at":"2026-10-22T17:33:05.072262Z"},
 "1562881904347447427":{"channel_id":"1556204275078791300","entries":[{"applied_label":0.0,"features":{"cross":0.0,"fit":0.9,"fresh":1.0,"hype":0.0,"meme":0.0,"underdog":0.26161938784871275,"velocity":0.7699724662657356},"game_id":"t:video-of-invokyr-49f4b0","score":48.8}],"kind":"roundup","last_down":0,"last_up":0,"message_id":"1562881904347447427","posted_at":"2026-10-22T17:33:05.072262Z"},
 "1562881914216521750":{"channel_id":"1556204275078791300","entries":[{"applied_label":0.0,"features":{"cross":0.6,"fit":0.99856,"fresh":0.2,"hype":0.0,"meme":0.0,"underdog":0.37347113612894467,"velocity":0.504},"game_id":"steam:2434930","score":45.3}],"kind":"roundup","last_down":0,"last_up":0,"message_id":"1562881914216521750","posted_at":"2026-10-22T17:33:05.072262Z"},
-"1562905077751095367":{"channel_id":"1556204276907249746","entries":[],"kind":"status","last_down":0,"last_up":0,"message_id":"1562905077751095367","posted_at":"2026-10-22T19:06:46.988387Z"}
+"1562905077751095367":{"channel_id":"1556204276907249746","entries":[],"kind":"status","last_down":0,"last_up":0,"message_id":"1562905077751095367","posted_at":"2026-10-22T19:06:46.988387Z"},
+"1562906113991647234":{"channel_id":"1556204276907249746","entries":[],"kind":"status","last_down":0,"last_up":0,"message_id":"1562906113991647234","posted_at":"2026-10-22T19:10:53.883773Z"}
 }
 }
