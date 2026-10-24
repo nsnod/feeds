@@ -214,7 +214,6 @@
 "bluesky:did:plc:gvm3ji73k62rwp66lj5sz3hj/3mybnez2x2k2n":{"at":"2026-10-22T19:06:46.988387Z","eph":0.07800067816309017},
 "bluesky:did:plc:gwfudxzrtnymzp6dq2chgqbp/3mxkpb3qsns2a":{"at":"2026-10-13T22:43:54.153658Z","eph":0.04244424829902487},
 "bluesky:did:plc:gwfudxzrtnymzp6dq2chgqbp/3my4cszqp7c2k":{"at":"2026-10-20T12:05:53.278102Z","eph":0.06671236584117898},
-"bluesky:did:plc:gzijvg32vz7d454hwqfu6skf/3mxcpfkvhns2a":{"at":"2026-10-10T18:44:49.625280Z","eph":0.2957344792772976},
 "bluesky:did:plc:gzijvg32vz7d454hwqfu6skf/3mxeun3rd622h":{"at":"2026-10-11T13:25:17.606610Z","eph":0.1013994962881278},
 "bluesky:did:plc:gzijvg32vz7d454hwqfu6skf/3mxjbmiiesc2p":{"at":"2026-10-13T03:39:46.413241Z","eph":0.3832831134119222},
 "bluesky:did:plc:gzijvg32vz7d454hwqfu6skf/3my2mlbgdj22c":{"at":"2026-10-20T06:37:17.302475Z","eph":0.014152139069791275},
@@ -361,8 +360,6 @@
 "bluesky:did:plc:ryogn3l4qp34ivdul7cgmkdc/3mxpswb3kia2t":{"at":"2026-10-15T23:00:38.842272Z","eph":0.2138392287766069},
 "bluesky:did:plc:savheqcbg5qn6wlfqeu5qf4r/3mxh7pe5y6c2r":{"at":"2026-10-12T07:20:39.497291Z","eph":0.0},
 "bluesky:did:plc:sexe7hnhhnqtm4exelz7ksqi/3mxf3zwstis2g":{"at":"2026-10-11T18:13:08.230108Z","eph":0.0},
-"bluesky:did:plc:seyf6fxxjhtdlncdqc4flj4j/3mxcopm4xt226":{"at":"2026-10-10T18:44:49.625280Z","eph":0.028084231757541708},
-"bluesky:did:plc:seyf6fxxjhtdlncdqc4flj4j/3mxcoznchpc26":{"at":"2026-10-10T18:44:49.625280Z","eph":0.0},
 "bluesky:did:plc:seyf6fxxjhtdlncdqc4flj4j/3mxfb77yycs2z":{"at":"2026-10-11T18:13:08.230108Z","eph":0.0},
 "bluesky:did:plc:seyf6fxxjhtdlncdqc4flj4j/3mxoz2bfqys2y":{"at":"2026-10-15T16:49:59.358966Z","eph":0.013949744922033389},
 "bluesky:did:plc:seyf6fxxjhtdlncdqc4flj4j/3myfhixlk7c22":{"at":"2026-10-22T19:06:46.988387Z","eph":0.2890486587438446},
@@ -498,7 +495,6 @@
 "youtube:8Qh_JIIXiXQ":{"at":"2026-10-22T19:06:46.988387Z","eph":133.25534592793397},
 "youtube:8UOVPzvaVAg":{"at":"2026-10-17T21:05:28.746011Z","eph":213.6082737128501},
 "youtube:A-MU8Ev4cKM":{"at":"2026-10-22T19:06:46.988387Z","eph":24.601725430567527},
-"youtube:B4iEIaROXRU":{"at":"2026-10-10T18:44:49.625280Z","eph":40.59707500954938},
 "youtube:BOxO7la4hjA":{"at":"2026-10-22T12:27:36.876267Z","eph":130.13623589795662},
 "youtube:CjZC2lQtAqw":{"at":"2026-10-18T21:23:24.218765Z","eph":202.77276483232774},
 "youtube:Dlq84WZkFSo":{"at":"2026-10-21T20:39:15.643694Z","eph":181.9100588892952},
@@ -539,7 +535,6 @@
 "youtube:sAOxy36h19U":{"at":"2026-10-11T13:25:17.606610Z","eph":95.3730907472865},
 "youtube:sufZCLypg_M":{"at":"2026-10-13T18:12:04.311743Z","eph":140.8040017710723},
 "youtube:uh5UR3uWBAE":{"at":"2026-10-21T20:39:15.643694Z","eph":34.33327310975505},
-"youtube:wXF7-WkjpYw":{"at":"2026-10-10T18:44:49.625280Z","eph":396.6580971954362},
 "youtube:y3FW8D9W_L0":{"at":"2026-10-20T16:52:57.163161Z","eph":134.92456082658148}
 }
 }
