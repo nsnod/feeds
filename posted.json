@@ -150,8 +150,6 @@
 "t:xbox-series-21df07":{"pending_roundup":false,"roundup_at":"2026-10-09T18:25:51.212588Z","roundup_score":54.0,"would_have_alarmed":false}
 },
 "messages":{
-"1558643114649059329":{"channel_id":"1556204275078791300","entries":[],"kind":"roundup_header","last_down":0,"last_up":0,"message_id":"1558643114649059329","posted_at":"2026-10-11T00:49:50.809979Z"},
-"1558643119484837959":{"channel_id":"1556204275078791300","entries":[{"applied_label":0.0,"features":{"cross":0.0,"fit":1.0,"fresh":1.0,"hype":0.0,"meme":0.0,"underdog":0.37104748005741156,"velocity":0.777303810217606},"game_id":"t:friendslop-weekend-ac4e63","score":50.0}],"kind":"roundup","last_down":0,"last_up":0,"message_id":"1558643119484837959","posted_at":"2026-10-11T00:49:50.809979Z","reactions_checked_at":"2026-10-17T23:02:54.630660Z"},
 "1558729571845673122":{"channel_id":"1556204275078791300","entries":[],"kind":"roundup_header","last_down":0,"last_up":0,"message_id":"1558729571845673122","posted_at":"2026-10-11T06:33:15.659675Z"},
 "1558729575197048884":{"channel_id":"1556204275078791300","entries":[{"applied_label":0.0,"features":{"cross":0.6,"fit":0.8,"fresh":1.0,"hype":0.175,"meme":0.0,"underdog":0.7525595249563949,"velocity":1.0},"game_id":"itch:firdousmahmood/hushclaw","score":69.9}],"kind":"roundup","last_down":0,"last_up":0,"message_id":"1558729575197048884","posted_at":"2026-10-11T06:33:15.659675Z","reactions_checked_at":"2026-10-18T05:12:39.482198Z"},
 "1558905690024579073":{"channel_id":"1556204275078791300","entries":[],"kind":"roundup_header","last_down":0,"last_up":0,"message_id":"1558905690024579073","posted_at":"2026-10-11T18:13:08.230108Z"},
