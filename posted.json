@@ -150,8 +150,6 @@
 "t:xbox-series-21df07":{"pending_roundup":false,"roundup_at":"2026-10-09T18:25:51.212588Z","roundup_score":54.0,"would_have_alarmed":false}
 },
 "messages":{
-"1560427591276433620":{"channel_id":"1556204275078791300","entries":[],"kind":"roundup_header","last_down":0,"last_up":0,"message_id":"1560427591276433620","posted_at":"2026-10-15T23:00:38.842272Z"},
-"1560427593935626324":{"channel_id":"1556204275078791300","entries":[{"applied_label":0.0,"features":{"cross":0.0,"fit":0.9,"fresh":1.0,"hype":0.0,"meme":0.0,"underdog":0.3497920881405261,"velocity":1.0},"game_id":"t:beyond-the-dark-181cf1","score":55.4}],"kind":"roundup","last_down":0,"last_up":0,"message_id":"1560427593935626324","posted_at":"2026-10-15T23:00:38.842272Z","reactions_checked_at":"2026-10-22T19:06:46.988387Z"},
 "1560596163491532901":{"channel_id":"1556204275078791300","entries":[],"kind":"roundup_header","last_down":0,"last_up":0,"message_id":"1560596163491532901","posted_at":"2026-10-16T10:10:36.234853Z"},
 "1560596166201049131":{"channel_id":"1556204275078791300","entries":[{"applied_label":0.0,"features":{"cross":0.0,"fit":0.952,"fresh":1.0,"hype":0.0,"meme":0.0,"underdog":0.6942617901054833,"velocity":1.0},"game_id":"t:ritual-party-7d9641","score":61.5}],"kind":"roundup","last_down":0,"last_up":0,"message_id":"1560596166201049131","posted_at":"2026-10-16T10:10:36.234853Z","reactions_checked_at":"2026-10-22T19:06:46.988387Z"},
 "1560666775677435934":{"channel_id":"1556204275078791300","entries":[],"kind":"roundup_header","last_down":0,"last_up":0,"message_id":"1560666775677435934","posted_at":"2026-10-16T14:51:04.344156Z"},
