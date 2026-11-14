@@ -150,8 +150,6 @@
 "t:xbox-series-21df07":{"pending_roundup":false,"roundup_at":"2026-10-09T18:25:51.212588Z","roundup_score":54.0,"would_have_alarmed":false}
 },
 "messages":{
-"1560104917337645108":{"channel_id":"1556204275078791300","entries":[],"kind":"roundup_header","last_down":0,"last_up":0,"message_id":"1560104917337645108","posted_at":"2026-10-15T01:38:32.433746Z"},
-"1560104921091674205":{"channel_id":"1556204275078791300","entries":[{"applied_label":0.0,"features":{"cross":0.0,"fit":1.0,"fresh":1.0,"hype":0.0,"meme":0.0,"underdog":0.3170559484659215,"velocity":0.8740767823623555},"game_id":"t:booooo-817a08","score":53.2}],"kind":"roundup","last_down":0,"last_up":0,"message_id":"1560104921091674205","posted_at":"2026-10-15T01:38:32.433746Z","reactions_checked_at":"2026-10-21T23:38:25.645737Z"},
 "1560261130876616786":{"channel_id":"1556204275078791300","entries":[],"kind":"roundup_header","last_down":0,"last_up":0,"message_id":"1560261130876616786","posted_at":"2026-10-15T11:59:14.724635Z"},
 "1560261134387253371":{"channel_id":"1556204275078791300","entries":[{"applied_label":0.0,"features":{"cross":0.0,"fit":1.0,"fresh":1.0,"hype":0.0,"meme":0.0,"underdog":0.7747608184325642,"velocity":1.0},"game_id":"steam:4326820","score":63.4}],"kind":"roundup","last_down":0,"last_up":0,"message_id":"1560261134387253371","posted_at":"2026-10-15T11:59:14.724635Z","reactions_checked_at":"2026-10-22T06:40:33.242681Z"},
 "1560334305366900838":{"channel_id":"1556204275078791300","entries":[],"kind":"roundup_header","last_down":0,"last_up":0,"message_id":"1560334305366900838","posted_at":"2026-10-15T16:49:59.358966Z"},
