@@ -149,15 +149,5 @@
 "t:vr-arpg-3cc630":{"pending_roundup":false,"roundup_at":"2026-10-17T23:02:54.630660Z","roundup_score":55.7,"would_have_alarmed":false},
 "t:xbox-series-21df07":{"pending_roundup":false,"roundup_at":"2026-10-09T18:25:51.212588Z","roundup_score":54.0,"would_have_alarmed":false}
 },
-"messages":{
-"1562881864102846529":{"channel_id":"1556204275078791300","entries":[],"kind":"roundup_header","last_down":0,"last_up":0,"message_id":"1562881864102846529","posted_at":"2026-10-22T17:33:05.072262Z"},
-"1562881867806416909":{"channel_id":"1556204275078791300","entries":[{"applied_label":0.0,"features":{"cross":0.0,"fit":0.88,"fresh":1.0,"hype":0.0,"meme":0.0,"underdog":0.6817743262622192,"velocity":1.0},"game_id":"t:rope-and-rubble-0fb9ce","score":60.8}],"kind":"roundup","last_down":0,"last_up":0,"message_id":"1562881867806416909","posted_at":"2026-10-22T17:33:05.072262Z"},
-"1562881877558304912":{"channel_id":"1556204275078791300","entries":[{"applied_label":0.0,"features":{"cross":0.0,"fit":0.8,"fresh":1.0,"hype":0.0,"meme":0.0,"underdog":0.6938521843224142,"velocity":1.0},"game_id":"t:hotel-stardust-6d53b2","score":59.7}],"kind":"roundup","last_down":0,"last_up":0,"message_id":"1562881877558304912","posted_at":"2026-10-22T17:33:05.072262Z"},
-"1562881886659813488":{"channel_id":"1556204275078791300","entries":[{"applied_label":0.0,"features":{"cross":0.0,"fit":0.6,"fresh":1.0,"hype":0.0,"meme":0.0,"underdog":0.6817743262622192,"velocity":1.0},"game_id":"steam:5268980","score":56.4}],"kind":"roundup","last_down":0,"last_up":0,"message_id":"1562881886659813488","posted_at":"2026-10-22T17:33:05.072262Z"},
-"1562881894813802530":{"channel_id":"1556204275078791300","entries":[{"applied_label":0.0,"features":{"cross":0.0,"fit":0.96,"fresh":1.0,"hype":0.0,"meme":0.0,"underdog":0.20281146615141657,"velocity":1.0},"game_id":"t:blighten-6e7918","score":54.9}],"kind":"roundup","last_down":0,"last_up":0,"message_id":"1562881894813802530","posted_at":"2026-10-22T17:33:05.072262Z"},
-"1562881904347447427":{"channel_id":"1556204275078791300","entries":[{"applied_label":0.0,"features":{"cross":0.0,"fit":0.9,"fresh":1.0,"hype":0.0,"meme":0.0,"underdog":0.26161938784871275,"velocity":0.7699724662657356},"game_id":"t:video-of-invokyr-49f4b0","score":48.8}],"kind":"roundup","last_down":0,"last_up":0,"message_id":"1562881904347447427","posted_at":"2026-10-22T17:33:05.072262Z"},
-"1562881914216521750":{"channel_id":"1556204275078791300","entries":[{"applied_label":0.0,"features":{"cross":0.6,"fit":0.99856,"fresh":0.2,"hype":0.0,"meme":0.0,"underdog":0.37347113612894467,"velocity":0.504},"game_id":"steam:2434930","score":45.3}],"kind":"roundup","last_down":0,"last_up":0,"message_id":"1562881914216521750","posted_at":"2026-10-22T17:33:05.072262Z"},
-"1562905077751095367":{"channel_id":"1556204276907249746","entries":[],"kind":"status","last_down":0,"last_up":0,"message_id":"1562905077751095367","posted_at":"2026-10-22T19:06:46.988387Z"},
-"1562906113991647234":{"channel_id":"1556204276907249746","entries":[],"kind":"status","last_down":0,"last_up":0,"message_id":"1562906113991647234","posted_at":"2026-10-22T19:10:53.883773Z"}
-}
+"messages":{}
 }
